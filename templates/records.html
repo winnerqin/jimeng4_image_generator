@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>生成记录 - AI 图片生成器</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .nav-bar {
+            background: white;
+            padding: 15px 30px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+        
+        .nav-bar a {
+            color: #667eea;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+        
+        .nav-bar a:hover {
+            background: #667eea;
+            color: white;
+        }
+        
+        .nav-bar a.active {
+            background: #667eea;
+            color: white;
+        }
+        
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .filter-bar {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            align-items: center;
+        }
+        
+        .filter-bar input {
+            padding: 10px;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            flex: 1;
+            max-width: 300px;
+        }
+        
+        .filter-bar button {
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        
+        .filter-bar button:hover {
+            background: #5568d3;
+        }
+        
+        .records-table-container {
+            overflow-x: auto;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            max-height: 70vh;
+        }
+        
+        .records-table {
+            width: 100%;
+            border-collapse: collapse;
+            min-width: 1400px;
+        }
+        
+        .records-table th {
+            background: #f8f9fa;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #333;
+            border-bottom: 2px solid #dee2e6;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        
+        .records-table td {
+            padding: 12px;
+            border-bottom: 1px solid #dee2e6;
+            vertical-align: middle;
+        }
+        
+        .records-table tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .thumbnail {
+            width: 100px;
+            height: 100px;
+            object-fit: cover;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: transform 0.3s;
+        }
+        
+        .thumbnail:hover {
+            transform: scale(1.1);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+        
+        .sample-images-cell {
+            display: flex;
+            gap: 5px;
+            flex-wrap: wrap;
+        }
+        
+        .sample-thumb {
+            width: 40px;
+            height: 40px;
+            object-fit: cover;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        
+        .download-btn {
+            padding: 6px 12px;
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .download-btn:hover {
+            background: #218838;
+        }
+        
+        .delete-btn {
+            padding: 6px 12px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+            margin-left: 5px;
+        }
+        
+        .delete-btn:hover {
+            background: #c82333;
+        }
+        
+        .prompt-cell {
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .prompt-cell:hover {
+            white-space: normal;
+            overflow: visible;
+        }
+        
+        .pagination {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 20px;
+            align-items: center;
+        }
+        
+        .pagination button {
+            padding: 8px 16px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        
+        .pagination button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .pagination span {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        /* 图片放大查看模态框 */
+        .lightbox {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.9);
+            z-index: 9999;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .lightbox.active {
+            display: flex;
+        }
+        
+        .lightbox-content {
+            max-width: 90vw;
+            max-height: 90vh;
+            position: relative;
+        }
+        
+        .lightbox-image {
+            max-width: 100%;
+            max-height: 90vh;
+            object-fit: contain;
+            border-radius: 8px;
+        }
+        
+        .lightbox-close {
+            position: absolute;
+            top: -40px;
+            right: 0;
+            font-size: 36px;
+            color: white;
+            cursor: pointer;
+            background: rgba(0,0,0,0.5);
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.3s;
+        }
+        
+        .lightbox-close:hover {
+            background: rgba(0,0,0,0.8);
+        }
+        
+        .lightbox-info {
+            position: absolute;
+            bottom: -80px;
+            left: 0;
+            right: 0;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 0.9em;
+        }
+        
+        .lightbox-info p {
+            margin: 5px 0;
+        }
+        
+        .lightbox-nav {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(0,0,0,0.5);
+            color: white;
+            font-size: 36px;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        
+        .lightbox-nav:hover {
+            background: rgba(0,0,0,0.8);
+        }
+        
+        .lightbox-prev {
+            left: -70px;
+        }
+        
+        .lightbox-next {
+            right: -70px;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            font-size: 1.2em;
+            color: #666;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 60px;
+            color: #999;
+        }
+        
+        .empty-state svg {
+            width: 100px;
+            height: 100px;
+            margin-bottom: 20px;
+            opacity: 0.3;
+        }
+    </style>
+</head>
+<body>
+    <div class="nav-bar">
+        <a href="/">🎨 单图生成</a>
+        <a href="/batch">📦 批量生成</a>
+        <a href="/records" class="active">📊 生成记录</a>
+    </div>
+    
+    <div class="container">
+        <div class="header">
+            <h1>📊 生成记录</h1>
+            <p>查看所有图片生成历史记录</p>
+        </div>
+        
+        <div class="content">
+            <div class="filter-bar">
+                <input type="text" id="searchInput" placeholder="搜索提示词..." onkeyup="handleSearch(event)">
+                <button onclick="loadRecords()">🔍 搜索</button>
+                <button onclick="loadRecords()">🔄 刷新</button>
+                <button onclick="batchDownload()" id="batchDownloadBtn" style="background: #28a745; display: none;">
+                    📦 批量下载 (<span id="selectedCount">0</span>)
+                </button>
+                <span style="margin-left: auto;">共 <strong id="totalCount">0</strong> 条记录</span>
+            </div>
+            
+            <div id="loadingArea" class="loading" style="display: none;">
+                加载中...
+            </div>
+            
+            <div id="emptyArea" class="empty-state" style="display: none;">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z" />
+                </svg>
+                <h3>暂无生成记录</h3>
+                <p>开始生成你的第一张图片吧！</p>
+            </div>
+            
+            <div class="records-table-container" id="tableContainer" style="display: none;">
+                <table class="records-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 50px;">
+                                <input type="checkbox" id="selectAll" onchange="toggleSelectAll(this.checked)">
+                            </th>
+                            <th style="width: 60px;">ID</th>
+                            <th style="width: 150px;">生成时间</th>
+                            <th style="width: 250px;">提示词</th>
+                            <th style="width: 100px;">图片比例</th>
+                            <th style="width: 150px;">参考示例图</th>
+                            <th style="width: 80px;">分辨率</th>
+                            <th style="width: 150px;">图片预览</th>
+                            <th style="width: 120px;">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recordsTableBody">
+                        <!-- 动态加载记录 -->
+                    </tbody>
+                </table>
+            </div>
+            
+            <div class="pagination" id="pagination" style="display: none;">
+                <button onclick="changePage(-1)" id="prevBtn">« 上一页</button>
+                <span>第 <strong id="currentPage">1</strong> 页</span>
+                <button onclick="changePage(1)" id="nextBtn">下一页 »</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 图片放大查看 -->
+    <div class="lightbox" id="lightbox" onclick="closeLightbox(event)">
+        <div class="lightbox-content">
+            <div class="lightbox-close" onclick="closeLightbox(event)">&times;</div>
+            <div class="lightbox-nav lightbox-prev" onclick="navigateLightbox(-1, event)">‹</div>
+            <div class="lightbox-nav lightbox-next" onclick="navigateLightbox(1, event)">›</div>
+            <img id="lightboxImage" class="lightbox-image" src="" alt="">
+            <div class="lightbox-info" id="lightboxInfo">
+                <!-- 动态显示图片信息 -->
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let records = [];
+        let currentPage = 1;
+        let pageSize = 20;
+        let totalRecords = 0;
+        let currentLightboxIndex = -1;
+        let selectedRecords = new Set();
+        
+        // 页面加载时获取记录
+        document.addEventListener('DOMContentLoaded', function() {
+            loadRecords();
+        });
+        
+        // 加载记录
+        async function loadRecords() {
+            const loading = document.getElementById('loadingArea');
+            const empty = document.getElementById('emptyArea');
+            const table = document.getElementById('tableContainer');
+            const pagination = document.getElementById('pagination');
+            
+            loading.style.display = 'block';
+            empty.style.display = 'none';
+            table.style.display = 'none';
+            pagination.style.display = 'none';
+            
+            try {
+                const searchTerm = document.getElementById('searchInput').value;
+                const offset = (currentPage - 1) * pageSize;
+                
+                const response = await fetch(`/api/records?limit=${pageSize}&offset=${offset}&search=${encodeURIComponent(searchTerm)}`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    records = data.records;
+                    totalRecords = data.total;
+                    
+                    document.getElementById('totalCount').textContent = totalRecords;
+                    
+                    if (records.length === 0) {
+                        empty.style.display = 'block';
+                    } else {
+                        renderRecords();
+                        table.style.display = 'block';
+                        pagination.style.display = 'flex';
+                        updatePagination();
+                    }
+                }
+            } catch (error) {
+                console.error('加载记录失败:', error);
+                alert('加载记录失败');
+            } finally {
+                loading.style.display = 'none';
+            }
+        }
+        
+        // 渲染记录表格
+        function renderRecords() {
+            const tbody = document.getElementById('recordsTableBody');
+            tbody.innerHTML = '';
+            
+            records.forEach((record, index) => {
+                const tr = document.createElement('tr');
+                
+                // 格式化时间
+                const date = new Date(record.created_at);
+                const dateStr = date.toLocaleString('zh-CN');
+                
+                // 处理示例图
+                let sampleImagesHTML = '';
+                if (record.sample_images && record.sample_images.length > 0) {
+                    sampleImagesHTML = record.sample_images.map(img => 
+                        `<img src="${img.url}" class="sample-thumb" onclick="openLightbox('${img.url}', event)" title="${img.filename}">`
+                    ).join('');
+                } else {
+                    sampleImagesHTML = '<span style="color: #999;">无</span>';
+                }
+                
+                const isChecked = selectedRecords.has(record.id) ? 'checked' : '';
+                
+                tr.innerHTML = `
+                    <td>
+                        <input type="checkbox" class="record-checkbox" 
+                               data-id="${record.id}" 
+                               data-filename="${record.filename}"
+                               onchange="toggleRecordSelection(${record.id}, '${record.filename}', this.checked)"
+                               ${isChecked}>
+                    </td>
+                    <td>${record.id}</td>
+                    <td>${dateStr}</td>
+                    <td class="prompt-cell" title="${record.prompt}">${record.prompt}</td>
+                    <td>${record.aspect_ratio || '-'}</td>
+                    <td>
+                        <div class="sample-images-cell">
+                            ${sampleImagesHTML}
+                        </div>
+                    </td>
+                    <td>${record.resolution || '-'}<br>${record.width}×${record.height}</td>
+                    <td>
+                        <img src="/output/${record.filename}" 
+                             class="thumbnail" 
+                             onclick="openLightboxWithRecord(${index})"
+                             onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ctext y=%2250%22 font-size=%2220%22%3E加载失败%3C/text%3E%3C/svg%3E'">
+                    </td>
+                    <td>
+                        <a href="/output/${record.filename}" download="${record.filename}" class="download-btn">
+                            ⬇️ 下载
+                        </a>
+                        <button class="delete-btn" onclick="deleteRecord(${record.id})">
+                            🗑️ 删除
+                        </button>
+                    </td>
+                `;
+                
+                tbody.appendChild(tr);
+            });
+        }
+        
+        // 打开图片放大查看（带记录信息）
+        function openLightboxWithRecord(index) {
+            currentLightboxIndex = index;
+            const record = records[index];
+            
+            const img = document.getElementById('lightboxImage');
+            img.src = `/output/${record.filename}`;
+            
+            const info = document.getElementById('lightboxInfo');
+            info.innerHTML = `
+                <p><strong>提示词:</strong> ${record.prompt}</p>
+                <p><strong>尺寸:</strong> ${record.width} × ${record.height} (${record.aspect_ratio})</p>
+                <p><strong>生成时间:</strong> ${new Date(record.created_at).toLocaleString('zh-CN')}</p>
+                <p><strong>文件名:</strong> ${record.filename}</p>
+            `;
+            
+            document.getElementById('lightbox').classList.add('active');
+        }
+        
+        // 打开图片放大查看（仅图片）
+        function openLightbox(url, event) {
+            event.stopPropagation();
+            currentLightboxIndex = -1;
+            
+            const img = document.getElementById('lightboxImage');
+            img.src = url;
+            
+            const info = document.getElementById('lightboxInfo');
+            info.innerHTML = '<p>参考示例图</p>';
+            
+            document.getElementById('lightbox').classList.add('active');
+        }
+        
+        // 关闭图片放大查看
+        function closeLightbox(event) {
+            if (event.target.id === 'lightbox' || event.target.classList.contains('lightbox-close')) {
+                document.getElementById('lightbox').classList.remove('active');
+                currentLightboxIndex = -1;
+            }
+        }
+        
+        // 切换图片（上一张/下一张）
+        function navigateLightbox(direction, event) {
+            event.stopPropagation();
+            
+            if (currentLightboxIndex === -1) return;
+            
+            currentLightboxIndex += direction;
+            
+            if (currentLightboxIndex < 0) {
+                currentLightboxIndex = records.length - 1;
+            } else if (currentLightboxIndex >= records.length) {
+                currentLightboxIndex = 0;
+            }
+            
+            openLightboxWithRecord(currentLightboxIndex);
+        }
+        
+        // 键盘导航
+        document.addEventListener('keydown', function(e) {
+            const lightbox = document.getElementById('lightbox');
+            if (!lightbox.classList.contains('active')) return;
+            
+            if (e.key === 'Escape') {
+                closeLightbox({ target: lightbox });
+            } else if (e.key === 'ArrowLeft') {
+                navigateLightbox(-1, { stopPropagation: () => {} });
+            } else if (e.key === 'ArrowRight') {
+                navigateLightbox(1, { stopPropagation: () => {} });
+            }
+        });
+        
+        // 删除记录
+        async function deleteRecord(id) {
+            if (!confirm('确定要删除这条记录吗？')) return;
+            
+            try {
+                const response = await fetch(`/api/records/${id}`, {
+                    method: 'DELETE'
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    alert('删除成功');
+                    loadRecords();
+                } else {
+                    alert('删除失败: ' + result.error);
+                }
+            } catch (error) {
+                alert('删除失败: ' + error.message);
+            }
+        }
+        
+        // 搜索
+        function handleSearch(event) {
+            if (event.key === 'Enter') {
+                currentPage = 1;
+                loadRecords();
+            }
+        }
+        
+        // 翻页
+        function changePage(delta) {
+            const totalPages = Math.ceil(totalRecords / pageSize);
+            const newPage = currentPage + delta;
+            
+            if (newPage >= 1 && newPage <= totalPages) {
+                currentPage = newPage;
+                loadRecords();
+            }
+        }
+        
+        // 更新分页按钮状态
+        function updatePagination() {
+            const totalPages = Math.ceil(totalRecords / pageSize);
+            
+            document.getElementById('currentPage').textContent = currentPage;
+            document.getElementById('prevBtn').disabled = currentPage <= 1;
+            document.getElementById('nextBtn').disabled = currentPage >= totalPages;
+        }
+        
+        // 切换单个记录选择
+        function toggleRecordSelection(id, filename, checked) {
+            if (checked) {
+                selectedRecords.add(id);
+            } else {
+                selectedRecords.delete(id);
+            }
+            updateBatchDownloadButton();
+        }
+        
+        // 全选/取消全选
+        function toggleSelectAll(checked) {
+            selectedRecords.clear();
+            
+            if (checked) {
+                records.forEach(record => {
+                    selectedRecords.add(record.id);
+                });
+            }
+            
+            // 更新所有复选框状态
+            document.querySelectorAll('.record-checkbox').forEach(checkbox => {
+                checkbox.checked = checked;
+            });
+            
+            updateBatchDownloadButton();
+        }
+        
+        // 更新批量下载按钮
+        function updateBatchDownloadButton() {
+            const count = selectedRecords.size;
+            const btn = document.getElementById('batchDownloadBtn');
+            const countSpan = document.getElementById('selectedCount');
+            
+            countSpan.textContent = count;
+            
+            if (count > 0) {
+                btn.style.display = 'inline-block';
+            } else {
+                btn.style.display = 'none';
+            }
+            
+            // 更新全选复选框状态
+            const selectAll = document.getElementById('selectAll');
+            if (selectAll) {
+                selectAll.checked = count > 0 && count === records.length;
+                selectAll.indeterminate = count > 0 && count < records.length;
+            }
+        }
+        
+        // 批量下载
+        async function batchDownload() {
+            if (selectedRecords.size === 0) {
+                alert('请先选择要下载的记录');
+                return;
+            }
+            
+            const btn = document.getElementById('batchDownloadBtn');
+            btn.disabled = true;
+            btn.textContent = '打包中...';
+            
+            try {
+                const zip = new JSZip();
+                const selectedList = Array.from(selectedRecords);
+                
+                // 获取选中的记录
+                const selectedItems = records.filter(r => selectedRecords.has(r.id));
+                
+                let successCount = 0;
+                let failCount = 0;
+                
+                // 逐个下载图片并添加到zip
+                for (let i = 0; i < selectedItems.length; i++) {
+                    const record = selectedItems[i];
+                    btn.textContent = `打包中 ${i + 1}/${selectedItems.length}...`;
+                    
+                    try {
+                        const response = await fetch(`/output/${record.filename}`);
+                        if (response.ok) {
+                            const blob = await response.blob();
+                            zip.file(record.filename, blob);
+                            successCount++;
+                        } else {
+                            console.error(`下载失败: ${record.filename}`);
+                            failCount++;
+                        }
+                    } catch (error) {
+                        console.error(`下载出错: ${record.filename}`, error);
+                        failCount++;
+                    }
+                }
+                
+                // 生成zip文件
+                btn.textContent = '生成压缩包...';
+                const content = await zip.generateAsync({ type: 'blob' });
+                
+                // 下载
+                const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+                saveAs(content, `ai_images_${timestamp}.zip`);
+                
+                alert(`批量下载完成！\\n成功: ${successCount} 个\\n失败: ${failCount} 个`);
+                
+            } catch (error) {
+                console.error('批量下载失败:', error);
+                alert('批量下载失败: ' + error.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '📦 批量下载 (<span id="selectedCount">' + selectedRecords.size + '</span>)';
+            }
+        }
+    </script>
+</body>
+</html>

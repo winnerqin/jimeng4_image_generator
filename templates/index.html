@@ -3,135 +3,802 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>即梦4.0 图片生成工具</title>
-    <link rel="stylesheet" href="/static/style.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <title>AI 图片生成器</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+        
+        .content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            padding: 30px;
+        }
+        
+        .form-section {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .form-group label {
+            font-weight: 600;
+            color: #333;
+            font-size: 0.95em;
+        }
+        
+        .form-group input[type="text"],
+        .form-group textarea,
+        .form-group select,
+        .form-group input[type="number"] {
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 1em;
+            transition: border-color 0.3s;
+        }
+        
+        .form-group input:focus,
+        .form-group textarea:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .form-group textarea {
+            min-height: 100px;
+            resize: vertical;
+            font-family: inherit;
+        }
+        
+        .upload-area {
+            border: 2px dashed #667eea;
+            border-radius: 8px;
+            padding: 30px;
+            text-align: center;
+            cursor: pointer;
+            transition: background-color 0.3s;
+            background-color: #f8f9ff;
+        }
+        
+        .upload-area:hover {
+            background-color: #f0f2ff;
+        }
+        
+        .upload-area input[type="file"] {
+            display: none;
+        }
+        
+        .upload-icon {
+            font-size: 3em;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+        
+        .preview-images {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        .preview-image {
+            position: relative;
+            width: 100%;
+            padding-bottom: 100%;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .preview-image img {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        
+        .preview-image .remove-btn {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background: rgba(255,0,0,0.8);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            cursor: pointer;
+            font-size: 16px;
+            line-height: 1;
+        }
+        
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        
+        .generate-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 1.1em;
+            font-weight: 600;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin-top: 10px;
+        }
+        
+        .generate-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.4);
+        }
+        
+        .generate-btn:active {
+            transform: translateY(0);
+        }
+        
+        .generate-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .result-section {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            display: none;
+        }
+        
+        .loading.active {
+            display: block;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .result-images {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 20px;
+        }
+        
+        .result-image {
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            transition: transform 0.3s;
+        }
+        
+        .result-image:hover {
+            transform: scale(1.05);
+        }
+        
+        .result-image img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        
+        .result-info {
+            padding: 15px;
+            background: #f8f9fa;
+        }
+        
+        .result-info p {
+            margin: 5px 0;
+            font-size: 0.9em;
+            color: #666;
+        }
+        
+        .download-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9em;
+            margin-top: 10px;
+            width: 100%;
+        }
+        
+        .download-btn:hover {
+            background: #5568d3;
+        }
+        
+        .error-message {
+            background: #fee;
+            color: #c33;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .error-message.active {
+            display: block;
+        }
+        
+        .sample-images-section {
+            margin-bottom: 20px;
+        }
+        
+        .sample-images-title {
+            font-weight: 600;
+            color: #333;
+            font-size: 0.95em;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .sample-images-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+            gap: 10px;
+            max-height: 300px;
+            overflow-y: auto;
+            padding: 10px;
+            background: #f8f9ff;
+            border-radius: 8px;
+            border: 2px solid #e0e0e0;
+        }
+        
+        .sample-image-item {
+            position: relative;
+            cursor: pointer;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 3px solid transparent;
+            transition: all 0.3s;
+        }
+        
+        .sample-image-item:hover {
+            border-color: #667eea;
+            transform: scale(1.05);
+        }
+        
+        .sample-image-item.selected {
+            border-color: #667eea;
+            box-shadow: 0 0 0 2px #667eea;
+        }
+        
+        .sample-image-item img {
+            width: 100%;
+            height: 100px;
+            object-fit: cover;
+            display: block;
+        }
+        
+        .sample-image-count {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background: #667eea;
+            color: white;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: bold;
+            opacity: 0;
+        }
+        
+        .sample-image-item.selected .sample-image-count {
+            opacity: 1;
+        }
+        
+        .sample-images-loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+        
+        .sample-images-hint {
+            font-size: 0.85em;
+            color: #666;
+            margin-top: 8px;
+        }
+        
+        @media (max-width: 768px) {
+            .content {
+                grid-template-columns: 1fr;
+            }
+            
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+        }
+        .nav-bar {
+            background: white;
+            padding: 15px 30px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            max-width: 1200px;
+            margin: 0 auto 20px auto;
+        }
+        
+        .nav-bar a {
+            color: #667eea;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+        
+        .nav-bar a:hover {
+            background: #667eea;
+            color: white;
+        }
+        
+        .nav-bar a.active {
+            background: #667eea;
+            color: white;
+        }
+    </style>
 </head>
 <body>
-    <div class="container">
-        <header class="header">
-            <h1 class="logo">
-                <i class="fas fa-image"></i> 即梦4.0 图片生成工具
-            </h1>
-            <p class="subtitle">基于火山引擎API，轻松创建高质量图片</p>
-        </header>
-
-        <main class="main-content">
-            <section class="form-section">
-                <div class="card">
-                    <h2 class="section-title">生成图片</h2>
-                    <form id="generate-form">
-                        <div class="form-group">
-                            <label for="prompt"><i class="fas fa-pencil-alt"></i> 提示词</label>
-                            <textarea id="prompt" name="prompt" rows="4" placeholder="描述您想要生成的图片，例如：'一只可爱的猫咪在草地上玩耍，阳光明媚，高质量，细节丰富'" required></textarea>
-                            <small class="hint">越详细的描述会得到越符合预期的结果</small>
-                        </div>
-
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label for="size"><i class="fas fa-expand-arrows-alt"></i> 尺寸</label>
-                                <select id="size" name="size" required>
-                                    <option value="1024x1024">1024x1024 (方形)</option>
-                                    <option value="1792x1024">1792x1024 (横向)</option>
-                                    <option value="1024x1792">1024x1792 (纵向)</option>
-                                    <option value="2048x2048" selected>2048x2048 (高清方形)</option>
-                                    <option value="2560x1440">2560x1440 (高清横向)</option>
-                                    <option value="1440x2560">1440x2560 (高清纵向)</option>
-                                </select>
-                            </div>
-
-                            <div class="form-group">
-                                <label for="count"><i class="fas fa-copy"></i> 数量</label>
-                                <input type="number" id="count" name="count" min="1" max="10" value="1" required>
-                            </div>
-                        </div>
-
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label for="scale"><i class="fas fa-sliders-h"></i> 文本影响程度</label>
-                                <input type="range" id="scale" name="scale" min="0" max="1" step="0.1" value="0.5">
-                                <span id="scale-value">0.5</span>
-                            </div>
-
-                            <div class="form-group">
-                                <label for="seed"><i class="fas fa-random"></i> 随机种子</label>
-                                <input type="number" id="seed" name="seed" value="-1" placeholder="-1表示随机">
-                            </div>
-                        </div>
-
-                        <div class="form-group checkbox-group">
-                            <label>
-                                <input type="checkbox" id="no_watermark" name="no_watermark">
-                                <span>不添加水印</span>
-                            </label>
-                        </div>
-
-                        <div class="button-group">
-                            <button type="submit" id="generate-btn" class="btn btn-primary">
-                                <i class="fas fa-magic"></i> 生成图片
-                            </button>
-                            <button type="button" id="clear-btn" class="btn btn-secondary">
-                                <i class="fas fa-times"></i> 清空
-                            </button>
-                        </div>
-                    </form>
-                </div>
-            </section>
-
-            <section class="status-section">
-                <div id="status-message" class="status-message hidden">
-                    <div class="status-icon"></div>
-                    <div class="status-content">
-                        <h3 id="status-title">处理中...</h3>
-                        <p id="status-text">正在生成图片，请稍候...</p>
-                        <div class="progress-container">
-                            <div id="progress-bar" class="progress-bar"></div>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <section class="results-section">
-                <h2 class="section-title">
-                    <i class="fas fa-images"></i> 生成结果
-                    <button type="button" id="load-history-btn" class="btn btn-sm btn-outline">
-                        <i class="fas fa-history"></i> 查看历史
-                    </button>
-                </h2>
-                <div id="results-container" class="results-container">
-                    <div class="empty-state">
-                        <i class="fas fa-image"></i>
-                        <p>生成的图片将显示在这里</p>
-                    </div>
-                </div>
-            </section>
-
-            <section class="history-section hidden">
-                <h2 class="section-title">
-                    <i class="fas fa-history"></i> 历史记录
-                    <button type="button" id="close-history-btn" class="btn btn-sm btn-outline">
-                        <i class="fas fa-times"></i> 关闭
-                    </button>
-                </h2>
-                <div id="history-container" class="history-container">
-                    <div class="empty-state">
-                        <i class="fas fa-clock"></i>
-                        <p>加载历史记录中...</p>
-                    </div>
-                </div>
-            </section>
-        </main>
-
-        <footer class="footer">
-            <p>&copy; 2025 即梦4.0 图片生成工具 - 基于火山引擎API</p>
-            <div class="footer-links">
-                <a href="#" target="_blank"><i class="fab fa-github"></i> GitHub</a>
-                <a href="#" target="_blank"><i class="fas fa-book"></i> 使用文档</a>
-            </div>
-        </footer>
+    <div class="nav-bar">
+        <a href="/" class="active">🎨 单图生成</a>
+        <a href="/batch">📦 批量生成</a>
+        <a href="/records">📊 生成记录</a>
     </div>
-
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/1.4.0/axios.min.js"></script>
-    <script src="/static/script.js"></script>
+    
+    <div class="container">
+        <div class="header">
+            <h1>🎨 AI 图片生成器</h1>
+            <p>输入提示词，上传参考图片，生成精美的 AI 图片</p>
+        </div>
+        
+        <div class="content">
+            <div class="form-section">
+                <div class="error-message" id="errorMessage"></div>
+                
+                <form id="generateForm">
+                    <div class="form-group">
+                        <label for="prompt">提示词 *</label>
+                        <textarea id="prompt" name="prompt" placeholder="描述你想要生成的图片..." required></textarea>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="negative_prompt">负面提示词</label>
+                        <textarea id="negative_prompt" name="negative_prompt" placeholder="描述不想出现的内容..."></textarea>
+                    </div>
+                    
+                    <div class="sample-images-section">
+                        <div class="sample-images-title">
+                            🖼️ 选择示例图片（从OSS）
+                        </div>
+                        <div class="sample-images-grid" id="sampleImagesGrid">
+                            <div class="sample-images-loading">加载中...</div>
+                        </div>
+                        <p class="sample-images-hint">
+                            💡 点击选择1-4张示例图作为参考图，可与手动上传的图片一起使用
+                        </p>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>手动上传参考图片（最多 4 张）</label>
+                        <div class="upload-area" onclick="document.getElementById('imageUpload').click()">
+                            <div class="upload-icon">📁</div>
+                            <p>点击上传或拖拽图片到这里</p>
+                            <p style="font-size: 0.9em; color: #666; margin-top: 5px;">支持 JPG, PNG 格式</p>
+                            <input type="file" id="imageUpload" name="images" multiple accept="image/*" onchange="handleFileSelect(event)">
+                        </div>
+                        <p style="font-size: 0.85em; color: #ff6b6b; margin-top: 8px;">
+                            ⚠️ 注意：参考图片功能需要配置对象存储（TOS/OSS）。如未配置，将仅使用文字生成图片。
+                            <a href="/static/IMAGE_UPLOAD_CONFIG.md" target="_blank" style="color: #667eea; text-decoration: underline;">查看配置说明</a>
+                        </p>
+                        <div class="preview-images" id="previewImages"></div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="aspect_ratio">图片比例</label>
+                            <select id="aspect_ratio" name="aspect_ratio">
+                                <option value="1:1">1:1 (正方形)</option>
+                                <option value="2:3">2:3 (竖屏)</option>
+                                <option value="3:2">3:2 (横屏)</option>
+                                <option value="3:4">3:4 (竖屏)</option>
+                                <option value="4:3">4:3 (横屏)</option>
+                                <option value="16:9">16:9 (宽屏)</option>
+                                <option value="9:16">9:16 (手机屏)</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="resolution">分辨率</label>
+                            <select id="resolution" name="resolution">
+                                <option value="1k">1K</option>
+                                <option value="2k" selected>2K</option>
+                                <option value="4k">4K</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="num_images">生成数量</label>
+                            <input type="number" id="num_images" name="num_images" value="1" min="1" max="10">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="steps">采样步数</label>
+                            <input type="number" id="steps" name="steps" value="28" min="1" max="100">
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="seed">种子值（0 为随机）</label>
+                            <input type="number" id="seed" name="seed" value="0" min="0" max="99999999">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="output_filename">输出文件名</label>
+                            <input type="text" id="output_filename" name="output_filename" value="generated" placeholder="文件名">
+                        </div>
+                    </div>
+                    
+                    <button type="submit" class="generate-btn" id="generateBtn">
+                        🚀 开始生成
+                    </button>
+                </form>
+            </div>
+            
+            <div class="result-section">
+                <div class="loading" id="loading">
+                    <div class="spinner"></div>
+                    <p>正在生成图片，请稍候...</p>
+                </div>
+                
+                <div class="result-images" id="resultImages"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let selectedFiles = [];
+        let selectedSampleImages = [];
+        let sampleImages = [];
+        
+        // 保存表单数据到localStorage
+        function saveFormData() {
+            try {
+                const formData = {
+                    prompt: document.getElementById('prompt').value,
+                    negative_prompt: document.getElementById('negative_prompt').value,
+                    aspect_ratio: document.getElementById('aspect_ratio').value,
+                    resolution: document.getElementById('resolution').value,
+                    num_images: document.getElementById('num_images').value,
+                    steps: document.getElementById('steps').value,
+                    seed: document.getElementById('seed').value,
+                    output_filename: document.getElementById('output_filename').value
+                };
+                localStorage.setItem('indexFormData', JSON.stringify(formData));
+            } catch (e) {
+                console.error('保存表单数据失败:', e);
+            }
+        }
+        
+        // 恢复表单数据
+        function loadFormData() {
+            try {
+                const saved = localStorage.getItem('indexFormData');
+                if (saved) {
+                    const formData = JSON.parse(saved);
+                    document.getElementById('prompt').value = formData.prompt || '';
+                    document.getElementById('negative_prompt').value = formData.negative_prompt || '';
+                    document.getElementById('aspect_ratio').value = formData.aspect_ratio || '1:1';
+                    document.getElementById('resolution').value = formData.resolution || '2k';
+                    document.getElementById('num_images').value = formData.num_images || 1;
+                    document.getElementById('steps').value = formData.steps || 28;
+                    document.getElementById('seed').value = formData.seed || 0;
+                    document.getElementById('output_filename').value = formData.output_filename || 'generated';
+                }
+            } catch (e) {
+                console.error('恢复表单数据失败:', e);
+            }
+        }
+        
+        // 监听表单输入变化
+        function setupAutoSave() {
+            const inputs = ['prompt', 'negative_prompt', 'aspect_ratio', 'resolution', 'num_images', 'steps', 'seed', 'output_filename'];
+            inputs.forEach(id => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.addEventListener('change', saveFormData);
+                    element.addEventListener('input', saveFormData);
+                }
+            });
+        }
+        
+        function handleFileSelect(event) {
+            const files = Array.from(event.target.files);
+            
+            if (selectedFiles.length + files.length > 4) {
+                alert('最多只能上传 4 张图片');
+                return;
+            }
+            
+            selectedFiles = selectedFiles.concat(files.slice(0, 4 - selectedFiles.length));
+            updatePreview();
+        }
+        
+        function updatePreview() {
+            const previewContainer = document.getElementById('previewImages');
+            previewContainer.innerHTML = '';
+            
+            selectedFiles.forEach((file, index) => {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const div = document.createElement('div');
+                    div.className = 'preview-image';
+                    div.innerHTML = `
+                        <img src="${e.target.result}" alt="预览">
+                        <button class="remove-btn" onclick="removeFile(${index})">×</button>
+                    `;
+                    previewContainer.appendChild(div);
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+        
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            updatePreview();
+        }
+        
+        document.getElementById('generateForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const errorMessage = document.getElementById('errorMessage');
+            const loading = document.getElementById('loading');
+            const resultImages = document.getElementById('resultImages');
+            const generateBtn = document.getElementById('generateBtn');
+            
+            errorMessage.classList.remove('active');
+            loading.classList.add('active');
+            resultImages.innerHTML = '';
+            generateBtn.disabled = true;
+            generateBtn.textContent = '生成中...';
+            
+            const formData = new FormData(this);
+            
+            // 添加手动上传的文件
+            selectedFiles.forEach(file => {
+                formData.append('images', file);
+            });
+            
+            // 添加选中的示例图 URL
+            selectedSampleImages.forEach(img => {
+                formData.append('sample_image_urls', img.url);
+            });
+            
+            try {
+                const response = await fetch('/generate', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    errorMessage.textContent = data.error;
+                    errorMessage.classList.add('active');
+                } else if (data.success) {
+                    displayResults(data);
+                }
+            } catch (error) {
+                errorMessage.textContent = '生成失败: ' + error.message;
+                errorMessage.classList.add('active');
+            } finally {
+                loading.classList.remove('active');
+                generateBtn.disabled = false;
+                generateBtn.textContent = '🚀 开始生成';
+            }
+        });
+        
+        function displayResults(data) {
+            const resultImages = document.getElementById('resultImages');
+            
+            data.images.forEach((img, index) => {
+                const div = document.createElement('div');
+                div.className = 'result-image';
+                div.innerHTML = `
+                    <img src="${img.url}" alt="生成的图片 ${index + 1}">
+                    <div class="result-info">
+                        <p><strong>文件名:</strong> ${img.filename}</p>
+                        <p><strong>种子值:</strong> ${img.seed}</p>
+                        <p><strong>尺寸:</strong> ${data.params.width} × ${data.params.height}</p>
+                        <a href="${img.url}" download="${img.filename}">
+                            <button class="download-btn">⬇️ 下载图片</button>
+                        </a>
+                    </div>
+                `;
+                resultImages.appendChild(div);
+            });
+        }
+        
+        // 拖拽上传
+        const uploadArea = document.querySelector('.upload-area');
+        
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.style.backgroundColor = '#e8eaff';
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.style.backgroundColor = '#f8f9ff';
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.style.backgroundColor = '#f8f9ff';
+            
+            const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+            
+            if (selectedFiles.length + files.length > 4) {
+                alert('最多只能上传 4 张图片');
+                return;
+            }
+            
+            selectedFiles = selectedFiles.concat(files.slice(0, 4 - selectedFiles.length));
+            updatePreview();
+        });
+        
+        // 加载示例图片
+        async function loadSampleImages() {
+            const grid = document.getElementById('sampleImagesGrid');
+            
+            try {
+                const response = await fetch('/api/sample-images');
+                const data = await response.json();
+                
+                if (data.success && data.images.length > 0) {
+                    sampleImages = data.images;
+                    grid.innerHTML = '';
+                    
+                    data.images.forEach((img, index) => {
+                        const div = document.createElement('div');
+                        div.className = 'sample-image-item';
+                        div.onclick = () => toggleSampleImage(index);
+                        div.innerHTML = `
+                            <img src="${img.url}" alt="${img.filename}" title="${img.filename}">
+                            <div class="sample-image-count"></div>
+                        `;
+                        grid.appendChild(div);
+                    });
+                } else {
+                    grid.innerHTML = '<div class="sample-images-loading">💭 暂无示例图片</div>';
+                }
+            } catch (error) {
+                console.error('加载示例图失败:', error);
+                grid.innerHTML = '<div class="sample-images-loading">❌ 加载失败</div>';
+            }
+        }
+        
+        // 切换示例图选择状态
+        function toggleSampleImage(index) {
+            const img = sampleImages[index];
+            const existingIndex = selectedSampleImages.findIndex(s => s.url === img.url);
+            
+            if (existingIndex >= 0) {
+                // 取消选中
+                selectedSampleImages.splice(existingIndex, 1);
+            } else {
+                // 检查总数限制（手动上传 + 示例图 <= 4）
+                const totalSelected = selectedFiles.length + selectedSampleImages.length;
+                if (totalSelected >= 4) {
+                    alert('最多只能选择 4 张图片（包括手动上传和示例图）');
+                    return;
+                }
+                selectedSampleImages.push(img);
+            }
+            
+            updateSampleImagesUI();
+        }
+        
+        // 更新示例图 UI
+        function updateSampleImagesUI() {
+            const grid = document.getElementById('sampleImagesGrid');
+            const items = grid.querySelectorAll('.sample-image-item');
+            
+            items.forEach((item, index) => {
+                const img = sampleImages[index];
+                const selectedIndex = selectedSampleImages.findIndex(s => s.url === img.url);
+                
+                if (selectedIndex >= 0) {
+                    item.classList.add('selected');
+                    const countDiv = item.querySelector('.sample-image-count');
+                    countDiv.textContent = selectedIndex + 1;
+                } else {
+                    item.classList.remove('selected');
+                }
+            });
+        }
+        
+        // 页面加载时获取示例图和恢复表单数据
+        document.addEventListener('DOMContentLoaded', function() {
+            loadSampleImages();
+            loadFormData();
+            setupAutoSave();
+        });
+    </script>
 </body>
 </html>
