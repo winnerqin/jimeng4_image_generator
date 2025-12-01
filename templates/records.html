@@ -50,6 +50,31 @@
             color: white;
         }
         
+        .user-info {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            color: #666;
+            font-weight: 500;
+        }
+        
+        .user-info .username {
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .logout-btn {
+            background: #dc3545;
+            color: white !important;
+            padding: 6px 14px !important;
+            font-size: 0.9em;
+        }
+        
+        .logout-btn:hover {
+            background: #c82333 !important;
+        }
+        
         .container {
             max-width: 1600px;
             margin: 0 auto;
@@ -360,6 +385,14 @@
         <a href="/">🎨 单图生成</a>
         <a href="/batch">📦 批量生成</a>
         <a href="/records" class="active">📊 生成记录</a>
+        <a href="/manage-samples">🖼️ 示例图管理</a>
+        {% if user.username == 'system_admin' %}
+        <a href="/stats">📈 系统统计</a>
+        {% endif %}
+        <div class="user-info">
+            <span>👤 <span class="username">{{ user.username }}</span></span>
+            <a href="/logout" class="logout-btn">登出</a>
+        </div>
     </div>
     
     <div class="container">
@@ -375,6 +408,9 @@
                 <button onclick="loadRecords()">🔄 刷新</button>
                 <button onclick="batchDownload()" id="batchDownloadBtn" style="background: #28a745; display: none;">
                     📦 批量下载 (<span id="selectedCount">0</span>)
+                </button>
+                <button onclick="deleteBatchRecords()" id="batchDeleteBtn" style="background: #dc3545; display: none; margin-left: 10px;">
+                    🗑️ 批量删除 (<span id="selectedCountDelete">0</span>)
                 </button>
                 <span style="margin-left: auto;">共 <strong id="totalCount">0</strong> 条记录</span>
             </div>
@@ -416,7 +452,7 @@
             
             <div class="pagination" id="pagination" style="display: none;">
                 <button onclick="changePage(-1)" id="prevBtn">« 上一页</button>
-                <span>第 <strong id="currentPage">1</strong> 页</span>
+                <span>第 <strong id="currentPage">1</strong> 页 / 共 <strong id="totalPages">1</strong> 页</span>
                 <button onclick="changePage(1)" id="nextBtn">下一页 »</button>
             </div>
         </div>
@@ -533,13 +569,13 @@
                     </td>
                     <td>${record.resolution || '-'}<br>${record.width}×${record.height}</td>
                     <td>
-                        <img src="/output/${record.filename}" 
+                        <img src="${record.image_path}" 
                              class="thumbnail" 
                              onclick="openLightboxWithRecord(${index})"
                              onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ctext y=%2250%22 font-size=%2220%22%3E加载失败%3C/text%3E%3C/svg%3E'">
                     </td>
                     <td>
-                        <a href="/output/${record.filename}" download="${record.filename}" class="download-btn">
+                        <a href="${record.image_path}" download="${record.filename}" class="download-btn">
                             ⬇️ 下载
                         </a>
                         <button class="delete-btn" onclick="deleteRecord(${record.id})">
@@ -558,7 +594,7 @@
             const record = records[index];
             
             const img = document.getElementById('lightboxImage');
-            img.src = `/output/${record.filename}`;
+            img.src = record.image_path;
             
             const info = document.getElementById('lightboxInfo');
             info.innerHTML = `
@@ -669,6 +705,7 @@
             const totalPages = Math.ceil(totalRecords / pageSize);
             
             document.getElementById('currentPage').textContent = currentPage;
+            document.getElementById('totalPages').textContent = totalPages;
             document.getElementById('prevBtn').disabled = currentPage <= 1;
             document.getElementById('nextBtn').disabled = currentPage >= totalPages;
         }
@@ -701,18 +738,23 @@
             updateBatchDownloadButton();
         }
         
-        // 更新批量下载按钮
+        // 更新批量下载按钮和批量删除按钮
         function updateBatchDownloadButton() {
             const count = selectedRecords.size;
-            const btn = document.getElementById('batchDownloadBtn');
-            const countSpan = document.getElementById('selectedCount');
+            const downloadBtn = document.getElementById('batchDownloadBtn');
+            const deleteBtn = document.getElementById('batchDeleteBtn');
+            const downloadCountSpan = document.getElementById('selectedCount');
+            const deleteCountSpan = document.getElementById('selectedCountDelete');
             
-            countSpan.textContent = count;
+            downloadCountSpan.textContent = count;
+            deleteCountSpan.textContent = count;
             
             if (count > 0) {
-                btn.style.display = 'inline-block';
+                downloadBtn.style.display = 'inline-block';
+                deleteBtn.style.display = 'inline-block';
             } else {
-                btn.style.display = 'none';
+                downloadBtn.style.display = 'none';
+                deleteBtn.style.display = 'none';
             }
             
             // 更新全选复选框状态
@@ -750,7 +792,7 @@
                     btn.textContent = `打包中 ${i + 1}/${selectedItems.length}...`;
                     
                     try {
-                        const response = await fetch(`/output/${record.filename}`);
+                        const response = await fetch(record.image_path);
                         if (response.ok) {
                             const blob = await response.blob();
                             zip.file(record.filename, blob);
@@ -781,6 +823,56 @@
             } finally {
                 btn.disabled = false;
                 btn.innerHTML = '📦 批量下载 (<span id="selectedCount">' + selectedRecords.size + '</span>)';
+            }
+        }
+        
+        // 批量删除记录
+        async function deleteBatchRecords() {
+            if (selectedRecords.size === 0) {
+                alert('请先选择要删除的记录');
+                return;
+            }
+            
+            if (!confirm(`确定要删除选中的 ${selectedRecords.size} 条记录吗？此操作不可恢复！`)) {
+                return;
+            }
+            
+            const btn = document.getElementById('batchDeleteBtn');
+            btn.disabled = true;
+            const originalText = btn.innerHTML;
+            btn.textContent = '删除中...';
+            
+            try {
+                const selectedList = Array.from(selectedRecords);
+                const response = await fetch('/api/batch-delete', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ ids: selectedList })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert(`批量删除完成！\\n成功: ${result.deleted} 条\\n失败: ${result.failed} 条`);
+                    
+                    // 清空选择
+                    selectedRecords.clear();
+                    document.getElementById('selectAll').checked = false;
+                    updateBatchDownloadButton();
+                    
+                    // 重新加载记录
+                    loadRecords();
+                } else {
+                    alert('批量删除失败: ' + result.message);
+                }
+            } catch (error) {
+                console.error('批量删除失败:', error);
+                alert('批量删除失败: ' + error.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalText;
             }
         }
     </script>

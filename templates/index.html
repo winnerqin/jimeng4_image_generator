@@ -410,6 +410,31 @@
             background: #667eea;
             color: white;
         }
+        
+        .user-info {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            color: #666;
+            font-weight: 500;
+        }
+        
+        .user-info .username {
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .logout-btn {
+            background: #dc3545;
+            color: white !important;
+            padding: 6px 14px !important;
+            font-size: 0.9em;
+        }
+        
+        .logout-btn:hover {
+            background: #c82333 !important;
+        }
     </style>
 </head>
 <body>
@@ -417,6 +442,14 @@
         <a href="/" class="active">🎨 单图生成</a>
         <a href="/batch">📦 批量生成</a>
         <a href="/records">📊 生成记录</a>
+        <a href="/manage-samples">🖼️ 示例图管理</a>
+        {% if user.username == 'system_admin' %}
+        <a href="/stats">📈 系统统计</a>
+        {% endif %}
+        <div class="user-info">
+            <span>👤 <span class="username">{{ user.username }}</span></span>
+            <a href="/logout" class="logout-btn">登出</a>
+        </div>
     </div>
     
     <div class="container">
@@ -624,6 +657,35 @@
             updatePreview();
         }
         
+        // 保持连接活跃，防止页面切换时中断请求
+        let keepAliveController = null;
+        let currentGenerationState = null;
+        
+        // 页面加载时恢复生成状态
+        window.addEventListener('load', function() {
+            const savedState = localStorage.getItem('singleGenerationState');
+            if (savedState) {
+                try {
+                    const state = JSON.parse(savedState);
+                    const elapsed = Date.now() - state.startTime;
+                    
+                    // 如果是进行中的任务（30分钟内）
+                    if (state.status === 'generating' && elapsed < 30 * 60 * 1000) {
+                        const loading = document.getElementById('loading');
+                        loading.classList.add('active');
+                        document.getElementById('generateBtn').disabled = true;
+                        document.getElementById('generateBtn').textContent = '生成中...';
+                    }
+                    // 如果是已完成的任务，恢复显示结果
+                    else if (state.status === 'completed' && state.result) {
+                        displayResults(state.result);
+                    }
+                } catch (e) {
+                    console.error('恢复生成状态失败:', e);
+                }
+            }
+        });
+        
         document.getElementById('generateForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
@@ -632,11 +694,19 @@
             const resultImages = document.getElementById('resultImages');
             const generateBtn = document.getElementById('generateBtn');
             
+            // 开始新的生成，清空之前的结果和状态
             errorMessage.classList.remove('active');
             loading.classList.add('active');
             resultImages.innerHTML = '';
             generateBtn.disabled = true;
             generateBtn.textContent = '生成中...';
+            
+            // 保存生成状态为进行中
+            currentGenerationState = {
+                status: 'generating',
+                startTime: Date.now()
+            };
+            localStorage.setItem('singleGenerationState', JSON.stringify(currentGenerationState));
             
             const formData = new FormData(this);
             
@@ -651,9 +721,11 @@
             });
             
             try {
+                // 使用 keepalive 选项，确保即使页面关闭请求也会完成
                 const response = await fetch('/generate', {
                     method: 'POST',
-                    body: formData
+                    body: formData,
+                    keepalive: true  // 关键：保持请求活跃
                 });
                 
                 const data = await response.json();
@@ -661,16 +733,69 @@
                 if (data.error) {
                     errorMessage.textContent = data.error;
                     errorMessage.classList.add('active');
+                    // 更新状态为失败
+                    currentGenerationState = {
+                        status: 'failed',
+                        error: data.error,
+                        startTime: currentGenerationState.startTime
+                    };
+                    localStorage.setItem('singleGenerationState', JSON.stringify(currentGenerationState));
                 } else if (data.success) {
                     displayResults(data);
+                    // 保存完成状态和结果
+                    currentGenerationState = {
+                        status: 'completed',
+                        result: data,
+                        startTime: currentGenerationState.startTime
+                    };
+                    localStorage.setItem('singleGenerationState', JSON.stringify(currentGenerationState));
+                    
+                    // 提示用户可以在生成记录中查看
+                    if (data.images && data.images.length > 0) {
+                        console.log('图片生成成功，可在生成记录页面查看');
+                    }
                 }
             } catch (error) {
                 errorMessage.textContent = '生成失败: ' + error.message;
                 errorMessage.classList.add('active');
+                // 更新状态为失败
+                currentGenerationState = {
+                    status: 'failed',
+                    error: error.message,
+                    startTime: currentGenerationState ? currentGenerationState.startTime : Date.now()
+                };
+                localStorage.setItem('singleGenerationState', JSON.stringify(currentGenerationState));
             } finally {
                 loading.classList.remove('active');
                 generateBtn.disabled = false;
                 generateBtn.textContent = '🚀 开始生成';
+            }
+        });
+        
+        // 监听页面可见性变化，提示用户
+        document.addEventListener('visibilitychange', function() {
+            if (document.hidden) {
+                const loading = document.getElementById('loading');
+                if (loading.classList.contains('active')) {
+                    console.log('页面已切换，但生成任务将继续在后台执行');
+                }
+            } else {
+                // 页面返回时，检查并恢复状态
+                const savedState = localStorage.getItem('singleGenerationState');
+                if (savedState) {
+                    try {
+                        const state = JSON.parse(savedState);
+                        if (state.status === 'completed' && state.result) {
+                            // 如果结果区域是空的，重新显示结果
+                            const resultImages = document.getElementById('resultImages');
+                            if (!resultImages.hasChildNodes()) {
+                                displayResults(state.result);
+                            }
+                        }
+                    } catch (e) {
+                        console.error('恢复状态失败:', e);
+                    }
+                }
             }
         });
         

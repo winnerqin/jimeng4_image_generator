@@ -11,6 +11,7 @@
 - 🔧 丰富的参数配置（种子、水印、文本影响程度等）
 - 🔐 支持火山引擎API的HMAC-SHA256签名认证
 - 🌐 提供Flask网页界面，方便直观操作
+- 👥 **多用户支持**，每个用户拥有独立的数据和文件空间
 
 ## 安装指南
 
@@ -102,19 +103,47 @@ python main.py --prompt "A cozy cabin" --access-key YOUR_ACCESS_KEY --secret-key
 
 1. 启动Web服务
 ```bash
-python app.py
+python web_app.py
 ```
 
-2. 访问网页
-   - 本地地址: http://127.0.0.1:5001
-   - 网络地址: http://您的IP地址:5001
+2. 创建用户账号
+   
+   **方式一：使用管理脚本（推荐）**
+   ```bash
+   # 创建新用户
+   python manage_users.py add username password
+   
+   # 列出所有用户
+   python manage_users.py list
+   
+   # 修改用户密码
+   python manage_users.py password username new_password
+   
+   # 删除用户
+   python manage_users.py delete username
+   ```
+   
+   **方式二：使用默认测试账号**
+   - 用户名：`admin`
+   - 密码：`admin123`
 
-3. 在网页界面中，您可以：
-   - 输入提示词
-   - 选择图片尺寸
-   - 设置生成数量
-   - 调整其他参数
-   - 查看生成历史和结果预览
+3. 登录系统
+   - 使用注册的账号登录
+   - 登录后可访问所有功能
+
+4. 功能页面：
+   - 🎨 **单图生成**：输入提示词生成单张图片
+   - 📦 **批量生成**：从Excel导入多个任务批量生成
+   - 📊 **生成记录**：查看历史记录，支持批量下载和删除
+   - 🖼️ **示例图管理**：上传和管理参考图片
+
+5. 多用户特性：
+   - 每个用户拥有独立的数据空间
+   - 生成的图片保存在各自的目录中（`output/用户ID/`）
+   - 上传的示例图保存在（`uploads/用户ID/`）
+   - OSS示例图按用户隔离（`sample/user_用户ID/`）
+   - 用户之间数据完全隔离，互不干扰
+   - 注册功能已禁用，需由管理员手动创建账号
 
 ## 项目结构
 

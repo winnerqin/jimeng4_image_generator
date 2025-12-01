@@ -49,6 +49,31 @@
             color: white;
         }
         
+        .user-info {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            color: #666;
+            font-weight: 500;
+        }
+        
+        .user-info .username {
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .logout-btn {
+            background: #dc3545;
+            color: white !important;
+            padding: 6px 14px !important;
+            font-size: 0.9em;
+        }
+        
+        .logout-btn:hover {
+            background: #c82333 !important;
+        }
+        
         .container {
             max-width: 1400px;
             margin: 0 auto;
@@ -187,6 +212,21 @@
             font-size: 0.9em;
             resize: vertical;
             min-height: 60px;
+        }
+        
+        .ref-images-input {
+            width: 100%;
+            padding: 6px 10px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 0.85em;
+            margin-bottom: 5px;
+        }
+        
+        .ref-images-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
         }
         
         .sample-select-btn {
@@ -402,6 +442,14 @@
         <a href="/">🎨 单图生成</a>
         <a href="/batch" class="active">📦 批量生成</a>
         <a href="/records">📊 生成记录</a>
+        <a href="/manage-samples">🖼️ 示例图管理</a>
+        {% if user.username == 'system_admin' %}
+        <a href="/stats">📈 系统统计</a>
+        {% endif %}
+        <div class="user-info">
+            <span>👤 <span class="username">{{ user.username }}</span></span>
+            <a href="/logout" class="logout-btn">登出</a>
+        </div>
     </div>
     
     <div class="container">
@@ -444,7 +492,7 @@
                                 <th style="width: 150px;">负面提示词</th>
                                 <th style="width: 120px;">图片比例</th>
                                 <th style="width: 100px;">分辨率</th>
-                                <th style="width: 150px;">参考示例图</th>
+                                <th style="width: 200px;">参考图</th>
                                 <th style="width: 100px;">生成数量</th>
                                 <th style="width: 120px;">文件名</th>
                                 <th style="width: 80px;">操作</th>
@@ -459,6 +507,15 @@
             
             <!-- 生成按钮 -->
             <div class="section">
+                <div style="display: flex; gap: 15px; align-items: center; margin-bottom: 15px;">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="backgroundMode" checked>
+                        <span>后台模式（推荐，可切换页面）</span>
+                    </label>
+                    <span style="color: #666; font-size: 0.9em;">
+                        💡 后台模式下，任务提交后在服务端执行，不受页面切换影响
+                    </span>
+                </div>
                 <button class="btn btn-primary" onclick="startBatchGeneration()" style="width: 100%; font-size: 1.2em;">
                     🚀 开始批量生成
                 </button>
@@ -554,6 +611,7 @@
                 negative_prompt: '',
                 aspect_ratio: '1:1',
                 resolution: '2k',
+                ref_images_text: '',
                 sample_images: [],
                 num_images: 1,
                 filename: `batch_${rowIndex + 1}`
@@ -608,6 +666,10 @@
                         </select>
                     </td>
                     <td>
+                        <input type="text" class="ref-images-input" 
+                               placeholder="输入文件名，逗号分隔" 
+                               value="${row.ref_images_text || ''}"
+                               onchange="updateRefImages(${index}, this.value)">
                         <button class="sample-select-btn" onclick="openSampleModal(${index})">
                             选择 (${row.sample_images.length})
                         </button>
@@ -651,6 +713,38 @@
         // 从行中移除示例图
         function removeSampleFromRow(rowIndex, sampleIndex) {
             batchData[rowIndex].sample_images.splice(sampleIndex, 1);
+            // 更新文本输入框
+            batchData[rowIndex].ref_images_text = batchData[rowIndex].sample_images
+                .map(img => img.filename.split('.')[0])
+                .join(', ');
+            saveBatchData();
+            renderTable();
+        }
+        
+        // 更新参考图（通过文本输入）
+        function updateRefImages(rowIndex, text) {
+            batchData[rowIndex].ref_images_text = text;
+            
+            // 自动匹配示例图
+            const matchedSamples = [];
+            if (text && text.trim()) {
+                // 支持逗号、分号、空格分隔
+                const filenames = text.split(/[,，;\s]+/).filter(f => f.trim());
+                
+                filenames.forEach(name => {
+                    const trimmedName = name.trim();
+                    // 在示例图中匹配文件名（模糊匹配）
+                    const matched = sampleImages.find(img => 
+                        img.filename.includes(trimmedName) || 
+                        trimmedName.includes(img.filename.split('.')[0])
+                    );
+                    if (matched && !matchedSamples.find(m => m.url === matched.url) && matchedSamples.length < 4) {
+                        matchedSamples.push(matched);
+                    }
+                });
+            }
+            
+            batchData[rowIndex].sample_images = matchedSamples;
             saveBatchData();
             renderTable();
         }
@@ -701,6 +795,10 @@
         // 确认示例图选择
         function confirmSampleSelection() {
             batchData[currentRowIndex].sample_images = [...selectedSamplesForRow];
+            // 同步更新文本输入框
+            batchData[currentRowIndex].ref_images_text = selectedSamplesForRow
+                .map(img => img.filename.split('.')[0])
+                .join(', ');
             saveBatchData();
             closeSampleModal();
             renderTable();
@@ -726,31 +824,47 @@
                 const rows = XLSX.utils.sheet_to_json(firstSheet);
                 
                 batchData = rows.map(row => {
-                    // 解析示例图文件名
-                    const sampleFilenames = row['示例图文件名'] || '';
+                    // 解析参考图文件名（兼容旧的"示例图文件名"列）
+                    const sampleFilenames = row['参考图'] || row['示例图文件名'] || '';
                     const matchedSamples = [];
                     
                     if (sampleFilenames && sampleFilenames.trim()) {
-                        // 支持逗号、分号、空格分隔
+                        // 支持逗号、中文逗号、分号、空格分隔
                         const filenames = sampleFilenames.split(/[,，;\s]+/).filter(f => f.trim());
                         
                         filenames.forEach(name => {
                             const trimmedName = name.trim();
                             // 在示例图中匹配文件名（模糊匹配）
                             const matched = sampleImages.find(img => 
-                                img.filename.includes(trimmedName) || trimmedName.includes(img.filename.split('.')[0])
+                                img.filename.includes(trimmedName) || 
+                                trimmedName.includes(img.filename.split('.')[0])
                             );
-                            if (matched && matchedSamples.length < 4) {
+                            if (matched && !matchedSamples.find(m => m.url === matched.url) && matchedSamples.length < 4) {
                                 matchedSamples.push(matched);
                             }
                         });
                     }
                     
+                    // 处理图片比例（Excel可能将1:1解析为数字1）
+                    let aspectRatio = row['图片比例'] || '1:1';
+                    if (typeof aspectRatio === 'number') {
+                        // 如果是数字，转换回比例格式
+                        if (aspectRatio === 1) aspectRatio = '1:1';
+                        else if (Math.abs(aspectRatio - 0.6667) < 0.01) aspectRatio = '2:3';
+                        else if (Math.abs(aspectRatio - 1.5) < 0.01) aspectRatio = '3:2';
+                        else if (Math.abs(aspectRatio - 0.75) < 0.01) aspectRatio = '3:4';
+                        else if (Math.abs(aspectRatio - 1.3333) < 0.01) aspectRatio = '4:3';
+                        else if (Math.abs(aspectRatio - 1.7778) < 0.01) aspectRatio = '16:9';
+                        else if (Math.abs(aspectRatio - 0.5625) < 0.01) aspectRatio = '9:16';
+                        else aspectRatio = '1:1'; // 默认值
+                    }
+                    
                     return {
                         prompt: row['提示词'] || '',
                         negative_prompt: row['负面提示词'] || '',
-                        aspect_ratio: row['图片比例'] || '1:1',
+                        aspect_ratio: String(aspectRatio),
                         resolution: row['分辨率'] || '2k',
+                        ref_images_text: row['参考图'] || row['示例图文件名'] || '',
                         sample_images: matchedSamples,
                         num_images: row['生成数量'] || 1,
                         filename: row['文件名'] || 'generated'
@@ -774,7 +888,7 @@
                     '负面提示词': '模糊，低质量',
                     '图片比例': '1:1',
                     '分辨率': '2k',
-                    '示例图文件名': 'sdk_generated_20251130',
+                    '参考图': 'sdk_generated_20251130, example_image',
                     '生成数量': 1,
                     '文件名': 'cat_01'
                 },
@@ -783,7 +897,7 @@
                     '负面提示词': '',
                     '图片比例': '16:9',
                     '分辨率': '2k',
-                    '示例图文件名': '',
+                    '参考图': '',
                     '生成数量': 2,
                     '文件名': 'landscape_01'
                 }
@@ -803,7 +917,7 @@
                 '负面提示词': row.negative_prompt,
                 '图片比例': row.aspect_ratio,
                 '分辨率': row.resolution,
-                '示例图数量': row.sample_images.length,
+                '参考图': row.ref_images_text || row.sample_images.map(img => img.filename.split('.')[0]).join(', '),
                 '生成数量': row.num_images,
                 '文件名': row.filename
             }));
@@ -813,6 +927,104 @@
             XLSX.utils.book_append_sheet(wb, ws, '批量任务');
             XLSX.writeFile(wb, `批量任务_${new Date().toISOString().slice(0,10)}.xlsx`);
         }
+        
+        // 批量生成状态
+        let isGenerating = false;
+        let generationStartTime = null;
+        let generationLogs = [];
+        let currentBatchId = null;
+        let progressPollingInterval = null;
+        
+        // 页面加载时恢复进度日志
+        window.addEventListener('load', function() {
+            const savedBatchId = localStorage.getItem('currentBatchId');
+            const savedProgress = localStorage.getItem('batchProgress');
+            const savedLogs = localStorage.getItem('batchLogs');
+            
+            if (savedLogs) {
+                try {
+                    generationLogs = JSON.parse(savedLogs);
+                    const progressLog = document.getElementById('progressLog');
+                    progressLog.innerHTML = '';
+                    generationLogs.forEach(log => {
+                        const logDiv = document.createElement('div');
+                        logDiv.className = 'log-' + log.type;
+                        logDiv.textContent = log.message;
+                        progressLog.appendChild(logDiv);
+                    });
+                    
+                    // 如果有日志，显示进度区域
+                    if (generationLogs.length > 0) {
+                        document.getElementById('progressArea').classList.add('active');
+                    }
+                } catch (e) {
+                    console.error('恢复日志失败:', e);
+                }
+            }
+            
+            // 如果有正在进行的批次ID，恢复轮询
+            if (savedBatchId) {
+                currentBatchId = savedBatchId;
+                isGenerating = true;
+                
+                if (savedProgress) {
+                    try {
+                        const data = JSON.parse(savedProgress);
+                        generationStartTime = data.startTime;
+                    } catch (e) {
+                        generationStartTime = Date.now();
+                    }
+                } else {
+                    generationStartTime = Date.now();
+                }
+                
+                document.getElementById('progressArea').classList.add('active');
+                addLog('🔄 检测到后台任务，恢复进度轮询...', 'info');
+                
+                // 立即查询一次进度
+                fetch(`/api/batch-progress/${currentBatchId}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.success) {
+                            const progress = data.progress;
+                            const total = progress.total;
+                            
+                            // 开始轮询
+                            startProgressPolling(currentBatchId, total);
+                        } else {
+                            // 批次不存在，清理
+                            localStorage.removeItem('currentBatchId');
+                            localStorage.removeItem('batchProgress');
+                            isGenerating = false;
+                            addLog('⚠️ 批次任务不存在或已过期', 'error');
+                        }
+                    })
+                    .catch(error => {
+                        console.error('查询进度失败:', error);
+                        addLog('❌ 无法连接到服务器', 'error');
+                    });
+            }
+            
+            if (savedProgress && !savedBatchId) {
+                try {
+                    const data = JSON.parse(savedProgress);
+                    const elapsed = Math.round((Date.now() - data.startTime) / 1000);
+                    
+                    // 如果是进行中的任务（1小时内）但没有批次ID（旧版本）
+                    if (data.completed < data.total && elapsed < 3600) {
+                        isGenerating = true;
+                        generationStartTime = data.startTime;
+                        document.getElementById('progressArea').classList.add('active');
+                        const percent = Math.round((data.completed / data.total) * 100);
+                        document.getElementById('progressFill').style.width = percent + '%';
+                        document.getElementById('progressFill').textContent = percent + '%';
+                        addLog(`页面已返回，当前进度: ${data.completed}/${data.total} (${percent}%)`, 'info');
+                    }
+                } catch (e) {
+                    console.error('恢复进度失败:', e);
+                }
+            }
+        });
         
         // 开始批量生成
         async function startBatchGeneration() {
@@ -829,9 +1041,26 @@
                 }
             }
             
-            if (!confirm(`确定要生成 ${batchData.length} 个任务吗？`)) {
-                return;
+            // 检查是否使用后台模式
+            const backgroundMode = document.getElementById('backgroundMode').checked;
+            
+            if (backgroundMode) {
+                // 后台模式：一次性提交所有任务
+                if (!confirm(`确定要生成 ${batchData.length} 个任务吗？\n\n✅ 后台模式：\n• 任务将在服务端处理\n• 可以自由切换页面或关闭浏览器\n• 完成后到"生成记录"查看结果\n• 估计耗时: ${batchData.length * 15}~${batchData.length * 30} 秒`)) {
+                    return;
+                }
+                await startBackgroundBatchGeneration();
+            } else {
+                // 前台模式：逐个生成（旧方式）
+                if (!confirm(`确定要生成 ${batchData.length} 个任务吗？\n\n⚠️ 前台模式：\n• 需要保持页面打开\n• 可以看到实时进度\n• 切换页面可能影响生成`)) {
+                    return;
+                }
+                await startForegroundBatchGeneration();
             }
+        }
+        
+        // 后台批量生成（服务端处理）
+        async function startBackgroundBatchGeneration() {
             
             const progressArea = document.getElementById('progressArea');
             const progressFill = document.getElementById('progressFill');
@@ -840,8 +1069,78 @@
             progressArea.classList.add('active');
             progressLog.innerHTML = '';
             
+            // 清空旧日志，开始新的生成任务
+            generationLogs = [];
+            localStorage.removeItem('batchLogs');
+            
+            addLog('========================================', 'info');
+            addLog(`🚀 提交批量任务到服务端`, 'info');
+            addLog(`📦 总任务数: ${batchData.length}`, 'info');
+            addLog('========================================', 'info');
+            
+            try {
+                const response = await fetch('/api/batch-generate-all', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ tasks: batchData })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    currentBatchId = result.batch_id;
+                    isGenerating = true;
+                    generationStartTime = Date.now();
+                    
+                    // 保存批次ID
+                    localStorage.setItem('currentBatchId', currentBatchId);
+                    
+                    addLog(`✅ 任务已成功提交到服务端`, 'success');
+                    addLog(`📋 批次ID: ${result.batch_id}`, 'info');
+                    addLog(`🔄 任务正在后台执行中...`, 'info');
+                    addLog('', 'info');
+                    addLog('💡 提示:', 'info');
+                    addLog('• 您现在可以关闭此页面或切换到其他页面', 'info');
+                    addLog('• 任务会在服务端继续执行', 'info');
+                    addLog('• 页面会自动更新进度', 'info');
+                    addLog(`• 预计完成时间: ${Math.ceil(result.total_tasks * 20 / 60)} 分钟`, 'info');
+                    
+                    // 开始轮询进度
+                    startProgressPolling(currentBatchId, result.total_tasks);
+                } else {
+                    addLog(`❌ 提交失败: ${result.error}`, 'error');
+                    alert('提交失败: ' + result.error);
+                }
+            } catch (error) {
+                addLog(`❌ 提交出错: ${error.message}`, 'error');
+                alert('提交失败: ' + error.message);
+            }
+        }
+        
+        // 前台批量生成（客户端逐个生成）
+        async function startForegroundBatchGeneration() {
+            const progressArea = document.getElementById('progressArea');
+            const progressFill = document.getElementById('progressFill');
+            const progressLog = document.getElementById('progressLog');
+            
+            progressArea.classList.add('active');
+            progressLog.innerHTML = '';
+            isGenerating = true;
+            generationStartTime = Date.now();
+            
+            // 清空旧日志，开始新的生成任务
+            generationLogs = [];
+            localStorage.removeItem('batchLogs');
+            
             let completed = 0;
             const total = batchData.length;
+            
+            addLog('========================================', 'info');
+            addLog(`开始批量生成 ${total} 个任务`, 'info');
+            addLog('提示：您可以切换到其他页面，生成会继续进行', 'info');
+            addLog('========================================', 'info');
             
             for (let i = 0; i < batchData.length; i++) {
                 const task = batchData[i];
@@ -851,12 +1150,14 @@
                 addLog(`${logPrefix} 开始生成: ${task.prompt.substring(0, 30)}...`, 'info');
                 
                 try {
+                    // 使用 keepalive 确保请求不会被中断
                     const response = await fetch('/api/batch-generate', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify(task)
+                        body: JSON.stringify(task),
+                        keepalive: true  // 关键：保持请求活跃
                     });
                     
                     const result = await response.json();
@@ -874,11 +1175,127 @@
                 const percent = Math.round((completed / total) * 100);
                 progressFill.style.width = percent + '%';
                 progressFill.textContent = percent + '%';
+                
+                // 保存进度到 localStorage
+                localStorage.setItem('batchProgress', JSON.stringify({
+                    completed: completed,
+                    total: total,
+                    startTime: generationStartTime
+                }));
             }
             
+            const elapsed = Math.round((Date.now() - generationStartTime) / 1000);
             addLog('========================================', 'info');
-            addLog(`批量生成完成！共 ${total} 个任务`, 'success');
+            addLog(`批量生成完成！共 ${total} 个任务，耗时 ${elapsed} 秒`, 'success');
+            addLog('请前往"生成记录"页面查看结果', 'info');
+            addLog('提示：此日志将保留到下次生成', 'info');
+            
+            isGenerating = false;
+            localStorage.removeItem('batchProgress');
+            // 注意：不删除 batchLogs，保留日志直到下次生成
+            
             alert('批量生成完成！请前往"生成记录"页面查看结果。');
+        }
+        
+        // 监听页面可见性变化
+        document.addEventListener('visibilitychange', function() {
+            if (document.hidden && isGenerating) {
+                console.log('页面已切换，批量生成任务将继续在后台执行');
+                addLog('💡 您已切换页面，任务将继续在后台执行', 'info');
+                // 可以在这里添加通知逻辑
+            } else if (!document.hidden) {
+                // 页面返回时，不管是否正在生成，都确保进度区域可见
+                const savedLogs = localStorage.getItem('batchLogs');
+                if (savedLogs && JSON.parse(savedLogs).length > 0) {
+                    document.getElementById('progressArea').classList.add('active');
+                }
+                
+                if (isGenerating) {
+                    console.log('页面已返回，批量生成任务正在进行中');
+                    // 恢复显示进度
+                    const progress = localStorage.getItem('batchProgress');
+                    if (progress) {
+                        const data = JSON.parse(progress);
+                        const percent = Math.round((data.completed / data.total) * 100);
+                        document.getElementById('progressFill').style.width = percent + '%';
+                        document.getElementById('progressFill').textContent = percent + '%';
+                        addLog(`✅ 页面已返回，当前进度: ${data.completed}/${data.total} (${percent}%)`, 'info');
+                    }
+                } else {
+                    console.log('页面已返回，显示之前的生成日志');
+                }
+            }
+        });
+        
+        // 开始轮询进度
+        function startProgressPolling(batchId, totalTasks) {
+            // 清除已有的轮询
+            if (progressPollingInterval) {
+                clearInterval(progressPollingInterval);
+            }
+            
+            // 每2秒轮询一次
+            progressPollingInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/batch-progress/${batchId}`);
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        const progress = data.progress;
+                        const completed = progress.completed + progress.failed;
+                        const percent = Math.round((completed / progress.total) * 100);
+                        
+                        // 更新进度条
+                        const progressFill = document.getElementById('progressFill');
+                        progressFill.style.width = percent + '%';
+                        progressFill.textContent = `${completed}/${progress.total} (${percent}%)`;
+                        
+                        if (progress.status === 'completed') {
+                            progressFill.style.background = '#28a745';
+                        } else {
+                            progressFill.style.background = 'linear-gradient(90deg, #667eea 0%, #764ba2 100%)';
+                        }
+                        
+                        // 更新进度到localStorage
+                        localStorage.setItem('batchProgress', JSON.stringify({
+                            completed: completed,
+                            total: progress.total,
+                            startTime: generationStartTime
+                        }));
+                        
+                        // 如果完成，停止轮询
+                        if (progress.status === 'completed') {
+                            clearInterval(progressPollingInterval);
+                            progressPollingInterval = null;
+                            isGenerating = false;
+                            localStorage.removeItem('currentBatchId');
+                            localStorage.removeItem('batchProgress');
+                            
+                            const elapsed = Math.round((Date.now() - generationStartTime) / 1000);
+                            addLog('========================================', 'info');
+                            addLog(`🎉 批量生成完成！`, 'success');
+                            addLog(`✅ 成功: ${progress.completed} 个`, 'success');
+                            if (progress.failed > 0) {
+                                addLog(`❌ 失败: ${progress.failed} 个`, 'error');
+                            }
+                            addLog(`⏱️ 总耗时: ${elapsed} 秒`, 'info');
+                            addLog('📊 请前往"生成记录"页面查看结果', 'info');
+                            
+                            alert(`🎉 批量生成完成！\n\n成功: ${progress.completed} 个\n失败: ${progress.failed} 个\n耗时: ${elapsed} 秒\n\n请到"生成记录"页面查看结果。`);
+                        }
+                    }
+                } catch (error) {
+                    console.error('轮询进度失败:', error);
+                }
+            }, 2000);
+        }
+        
+        // 停止轮询
+        function stopProgressPolling() {
+            if (progressPollingInterval) {
+                clearInterval(progressPollingInterval);
+                progressPollingInterval = null;
+            }
         }
         
         // 添加日志
@@ -889,6 +1306,14 @@
             div.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
             log.appendChild(div);
             log.scrollTop = log.scrollHeight;
+            
+            // 保存日志到 localStorage
+            generationLogs.push({ message: message, type: type, time: Date.now() });
+            // 只保留最近500条日志
+            if (generationLogs.length > 500) {
+                generationLogs = generationLogs.slice(-500);
+            }
+            localStorage.setItem('batchLogs', JSON.stringify(generationLogs));
         }
     </script>
 </body>
