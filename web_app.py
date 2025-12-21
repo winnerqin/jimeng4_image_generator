@@ -1382,7 +1382,7 @@ def analyze_script():
         
         # 调用火山引擎大模型
         response = client.chat.completions.create(
-            model="doubao-seed-1-8-251215",
+            model=os.environ.get('SCRIPT_ANALYSIS_MODEL', 'doubao-seed-1-8-251215'),
             messages=[
                 {
                     "role": "user",
