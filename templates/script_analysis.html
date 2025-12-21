@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>剧本分析 - AI 图片生成器</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .nav-bar {
+            background: white;
+            padding: 15px 30px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+        
+        .nav-bar a {
+            color: #667eea;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+        
+        .nav-bar a:hover {
+            background: #667eea;
+            color: white;
+        }
+        
+        .nav-bar a.active {
+            background: #667eea;
+            color: white;
+        }
+        
+        .user-info {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            color: #666;
+            font-weight: 500;
+        }
+        
+        .user-info .username {
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .logout-btn {
+            background: #dc3545;
+            color: white !important;
+            padding: 6px 14px !important;
+            font-size: 0.9em;
+        }
+        
+        .logout-btn:hover {
+            background: #c82333 !important;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+        
+        .content {
+            padding: 30px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+        }
+        
+        .input-section {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        .section-title {
+            font-size: 1.3em;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .script-input {
+            width: 100%;
+            min-height: 400px;
+            padding: 15px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.95em;
+            resize: vertical;
+            transition: border-color 0.3s;
+        }
+        
+        .script-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .analyze-btn {
+            flex: 1;
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            min-width: 120px;
+        }
+        
+        .analyze-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        .analyze-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .clear-btn {
+            padding: 12px 24px;
+            background: #999;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .clear-btn:hover {
+            background: #777;
+        }
+        
+        .output-section {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        .analysis-result {
+            background: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 20px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        
+        .result-item {
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .result-item:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+        
+        .result-title {
+            font-size: 1.1em;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 10px;
+            padding-bottom: 5px;
+            border-bottom: 2px solid #667eea;
+        }
+        
+        .character-item, .scene-item {
+            background: white;
+            padding: 12px;
+            margin-bottom: 10px;
+            border-radius: 6px;
+            border-left: 3px solid #667eea;
+        }
+        
+        .character-name, .scene-name {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+        }
+        
+        .character-desc, .scene-desc {
+            color: #666;
+            font-size: 0.95em;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .loading-spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f0f0f0;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+            vertical-align: middle;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+        
+        .success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: #999;
+        }
+        
+        @media (max-width: 1024px) {
+            .content {
+                grid-template-columns: 1fr;
+            }
+            
+            .script-input {
+                min-height: 300px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="nav-bar">
+        <a href="/">🎨 单图生成</a>
+        <a href="/batch">📦 批量生成</a>
+        <a href="/records">📊 生成记录</a>
+        <a href="/script-analysis" class="active">🎬 剧本分析</a>
+        <a href="/manage-samples">🖼️ 素材管理</a>
+        {% if user.username == 'system_admin' %}
+        <a href="/stats">📈 系统统计</a>
+        {% endif %}
+        <div class="user-info">
+            <span>👤 <span class="username">{{ user.username }}</span></span>
+            <a href="/logout" class="logout-btn">登出</a>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div class="header">
+            <h1>🎬 剧本分析与分镜生成</h1>
+            <p>输入剧本文本，自动拆解人物设定和分镜场景</p>
+        </div>
+        
+        <div class="content">
+            <!-- 输入区域 -->
+            <div class="input-section">
+                <div class="section-title">📝 输入剧本</div>
+                <textarea 
+                    class="script-input" 
+                    id="scriptInput" 
+                    placeholder="请输入剧本文本...&#10;&#10;示例：&#10;第一场 会议室&#10;人物：张三、李四&#10;...">
+                </textarea>
+                <div class="button-group">
+                    <button class="analyze-btn" id="analyzeBtn" onclick="analyzeScript()">🔍 分析剧本</button>
+                    <button class="clear-btn" onclick="clearScript()">清除</button>
+                </div>
+            </div>
+            
+            <!-- 输出区域 -->
+            <div class="output-section">
+                <div class="section-title">📊 分析结果</div>
+                <div id="resultContainer" class="analysis-result">
+                    <div class="empty-state">
+                        输入剧本文本后点击"分析剧本"进行拆解
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        async function analyzeScript() {
+            const scriptText = document.getElementById('scriptInput').value.trim();
+            
+            if (!scriptText) {
+                alert('请先输入剧本文本');
+                return;
+            }
+            
+            const resultContainer = document.getElementById('resultContainer');
+            const analyzeBtn = document.getElementById('analyzeBtn');
+            
+            // 显示加载状态
+            analyzeBtn.disabled = true;
+            resultContainer.innerHTML = `
+                <div class="loading">
+                    <span class="loading-spinner"></span>
+                    正在分析剧本，请稍候...
+                </div>
+            `;
+            
+            try {
+                const response = await fetch('/api/analyze-script', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ script: scriptText })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    displayAnalysisResult(data.result);
+                } else {
+                    resultContainer.innerHTML = `
+                        <div class="error">
+                            <strong>分析失败</strong><br>
+                            ${data.error || '未知错误'}
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('分析出错:', error);
+                resultContainer.innerHTML = `
+                    <div class="error">
+                        <strong>请求失败</strong><br>
+                        ${error.message}
+                    </div>
+                `;
+            } finally {
+                analyzeBtn.disabled = false;
+            }
+        }
+        
+        function displayAnalysisResult(result) {
+            const resultContainer = document.getElementById('resultContainer');
+            let html = '';
+            
+            // 人物设定
+            if (result.characters && result.characters.length > 0) {
+                html += '<div class="result-item">';
+                html += '<div class="result-title">👥 人物设定</div>';
+                result.characters.forEach(char => {
+                    html += `
+                        <div class="character-item">
+                            <div class="character-name">${escapeHtml(char.name)}</div>
+                            <div class="character-desc">${escapeHtml(char.description)}</div>
+                        </div>
+                    `;
+                });
+                html += '</div>';
+            }
+            
+            // 分镜场景
+            if (result.scenes && result.scenes.length > 0) {
+                html += '<div class="result-item">';
+                html += '<div class="result-title">🎬 分镜场景</div>';
+                result.scenes.forEach((scene, index) => {
+                    html += `
+                        <div class="scene-item">
+                            <div class="scene-name">第 ${index + 1} 场 - ${escapeHtml(scene.location)}</div>
+                            <div class="scene-desc">
+<strong>描述:</strong> ${escapeHtml(scene.description)}
+<br><strong>人物:</strong> ${escapeHtml(scene.characters.join(', ') || '无')}
+<br><strong>场景设定:</strong> ${escapeHtml(scene.setting)}
+                            </div>
+                        </div>
+                    `;
+                });
+                html += '</div>';
+            }
+            
+            if (!html) {
+                html = '<div class="empty-state">暂无分析结果</div>';
+            }
+            
+            resultContainer.innerHTML = html;
+        }
+        
+        function clearScript() {
+            document.getElementById('scriptInput').value = '';
+            document.getElementById('resultContainer').innerHTML = `
+                <div class="empty-state">
+                    输入剧本文本后点击"分析剧本"进行拆解
+                </div>
+            `;
+        }
+        
+        function escapeHtml(text) {
+            if (!text) return '';
+            const map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            };
+            return text.replace(/[&<>"']/g, m => map[m]);
+        }
+    </script>
+</body>
+</html>

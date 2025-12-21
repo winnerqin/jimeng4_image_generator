@@ -104,6 +104,30 @@ def init_database():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_created ON generation_records(user_id, created_at DESC)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_batch_id ON generation_records(batch_id)')
     
+    # 创建人物库和场景库表
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS person_library (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            filename TEXT NOT NULL,
+            url TEXT NOT NULL,
+            meta TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS scene_library (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            filename TEXT NOT NULL,
+            url TEXT NOT NULL,
+            meta TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    ''')
+    
     conn.commit()
     conn.close()
     print(f"数据库初始化完成: {DB_PATH}")
@@ -127,6 +151,23 @@ def save_generation_record(data):
     # 使用本地时间
     local_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
+    # 防止重复保存相同的 image_path（避免前端/网络重试导致重复记录）
+    existing = None
+    try:
+        cursor.execute('SELECT id FROM generation_records WHERE user_id = ? AND image_path = ? LIMIT 1', (
+            data.get('user_id'), data.get('image_path')
+        ))
+        row = cursor.fetchone()
+        if row:
+            existing = row[0]
+    except Exception:
+        existing = None
+
+    if existing:
+        # 已存在相同记录，返回已有 ID 并不重复插入
+        conn.close()
+        return existing
+
     cursor.execute('''
         INSERT INTO generation_records 
         (user_id, created_at, prompt, negative_prompt, aspect_ratio, resolution, width, height, 
@@ -156,6 +197,80 @@ def save_generation_record(data):
     conn.close()
     
     return record_id
+
+
+def save_person_asset(user_id, filename, url, meta=None):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO person_library (user_id, created_at, filename, url, meta)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (user_id, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), filename, url, json.dumps(meta or {})))
+    asset_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return asset_id
+
+
+def save_scene_asset(user_id, filename, url, meta=None):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO scene_library (user_id, created_at, filename, url, meta)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (user_id, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), filename, url, json.dumps(meta or {})))
+    asset_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return asset_id
+
+
+def get_person_assets(user_id, limit=500):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM person_library WHERE user_id = ? ORDER BY created_at DESC LIMIT ?', (user_id, limit))
+    rows = cursor.fetchall()
+    assets = [dict(r) for r in rows]
+    for a in assets:
+        try:
+            a['meta'] = json.loads(a.get('meta') or '{}')
+        except Exception:
+            a['meta'] = {}
+    conn.close()
+    return assets
+
+
+def get_scene_assets(user_id, limit=500):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM scene_library WHERE user_id = ? ORDER BY created_at DESC LIMIT ?', (user_id, limit))
+    rows = cursor.fetchall()
+    assets = [dict(r) for r in rows]
+    for a in assets:
+        try:
+            a['meta'] = json.loads(a.get('meta') or '{}')
+        except Exception:
+            a['meta'] = {}
+    conn.close()
+    return assets
+
+
+def delete_person_asset(asset_id):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM person_library WHERE id = ?', (asset_id,))
+    conn.commit()
+    conn.close()
+
+
+def delete_scene_asset(asset_id):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM scene_library WHERE id = ?', (asset_id,))
+    conn.commit()
+    conn.close()
 
 def get_all_records(user_id, limit=100, offset=0):
     """获取指定用户的所有记录"""

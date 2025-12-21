@@ -442,7 +442,8 @@
         <a href="/">🎨 单图生成</a>
         <a href="/batch" class="active">📦 批量生成</a>
         <a href="/records">📊 生成记录</a>
-        <a href="/manage-samples">🖼️ 示例图管理</a>
+        <a href="/script-analysis">🎬 剧本分析</a>
+        <a href="/manage-samples">🖼️ 素材管理</a>
         {% if user.username == 'system_admin' %}
         <a href="/stats">📈 系统统计</a>
         {% endif %}
@@ -516,9 +517,11 @@
                         💡 后台模式下，任务提交后在服务端执行，不受页面切换影响
                     </span>
                 </div>
-                <button class="btn btn-primary" onclick="startBatchGeneration()" style="width: 100%; font-size: 1.2em;">
-                    🚀 开始批量生成
-                </button>
+                <div>
+                    <button class="btn btn-primary" onclick="startBatchGeneration()" style="width: 100%; font-size: 1.2em;">
+                        🚀 开始批量生成
+                    </button>
+                </div>
             </div>
             
             <!-- 进度显示 -->
@@ -536,7 +539,13 @@
     <div class="modal" id="sampleModal">
         <div class="modal-content">
             <span class="modal-close" onclick="closeSampleModal()">&times;</span>
-            <h2>选择参考示例图</h2>
+            <div style="display:flex; align-items:center; gap:12px;">
+                <h2>选择参考示例图</h2>
+                <div style="margin-left:auto; display:flex; gap:8px;">
+                    <button type="button" id="batchPersonBtn" class="btn btn-sm btn-primary">人物库</button>
+                    <button type="button" id="batchSceneBtn" class="btn btn-sm">场景库</button>
+                </div>
+            </div>
             <p style="color: #666; margin-top: 10px;">点击图片选择（最多4张）</p>
             <div class="sample-grid" id="modalSampleGrid">
                 <!-- 动态加载示例图 -->
@@ -554,6 +563,8 @@
         let sampleImages = [];
         let currentRowIndex = -1;
         let selectedSamplesForRow = [];
+        // 批量模态示例图类别（person/scene）
+        let batchSampleCategory = 'person';
         
         // 保存批量数据到localStorage
         function saveBatchData() {
@@ -583,24 +594,72 @@
         
         // 页面加载时初始化
         document.addEventListener('DOMContentLoaded', function() {
-            loadSampleImages();
+            // 初始化批量模态类别按钮
+            const btnP = document.getElementById('batchPersonBtn');
+            const btnS = document.getElementById('batchSceneBtn');
+            if (btnP && btnS) {
+                btnP.addEventListener('click', () => switchBatchSampleCategory('person'));
+                btnS.addEventListener('click', () => switchBatchSampleCategory('scene'));
+            }
+            // 默认按 person 加载
+            loadSampleImages(batchSampleCategory);
+
             // 尝试恢复保存的数据
             if (!loadBatchData()) {
                 addRow(); // 默认添加一行
             }
+            // (保持原有行为：不自动清除批量缓存)
         });
         
-        // 加载示例图
-        async function loadSampleImages() {
+        // 加载示例图（按类别）
+        async function loadSampleImages(category) {
             try {
-                const response = await fetch('/api/sample-images');
+                const response = await fetch('/api/sample-images?category=' + encodeURIComponent(category));
                 const data = await response.json();
                 if (data.success) {
                     sampleImages = data.images;
+                } else {
+                    sampleImages = [];
                 }
             } catch (error) {
                 console.error('加载示例图失败:', error);
+                sampleImages = [];
             }
+        }
+
+        async function switchBatchSampleCategory(cat) {
+            batchSampleCategory = cat;
+            const btnP = document.getElementById('batchPersonBtn');
+            const btnS = document.getElementById('batchSceneBtn');
+            if (btnP && btnS) {
+                btnP.classList.toggle('btn-primary', cat === 'person');
+                btnS.classList.toggle('btn-primary', cat === 'scene');
+            }
+            await loadSampleImages(cat);
+
+            // 如果模态已打开，实时刷新模态内的示例图
+            const modal = document.getElementById('sampleModal');
+            if (modal && modal.classList.contains('active')) {
+                renderModalSampleGrid();
+            }
+        }
+
+        // 在模态中渲染 sampleImages
+        function renderModalSampleGrid() {
+            const grid = document.getElementById('modalSampleGrid');
+            if (!grid) return;
+            grid.innerHTML = '';
+            sampleImages.forEach((img, index) => {
+                const isSelected = selectedSamplesForRow.some(s => s.url === img.url);
+                const div = document.createElement('div');
+                div.className = `sample-item ${isSelected ? 'selected' : ''}`;
+                div.onclick = () => toggleSampleInModal(index);
+                div.innerHTML = `
+                    <img src="${img.url}" alt="${img.filename}">
+                    <div class="sample-check">✓</div>
+                `;
+                grid.appendChild(div);
+            });
         }
         
         // 添加行
@@ -1297,6 +1356,8 @@
                 progressPollingInterval = null;
             }
         }
+
+        // 保持原有行为：不提供重新生成/清除缓存功能
         
         // 添加日志
         function addLog(message, type = 'info') {

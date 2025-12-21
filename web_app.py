@@ -9,7 +9,7 @@ from pathlib import Path
 from functools import wraps
 from flask import Flask, render_template, request, jsonify, send_from_directory, session, redirect, url_for, flash
 from werkzeug.utils import secure_filename
-from volcengine.visual.VisualService import VisualService
+from openai import OpenAI
 import database
 
 # 全局变量：存储批量任务进度
@@ -131,22 +131,25 @@ def list_sample_images_from_oss(user_id=None):
         if not bucket:
             return []
         
-        # 列出 sample/user_{user_id}/ 目录下的所有文件
+        # 列出 sample/{category}/user_{user_id}/ 目录下的所有文件（同时列出人物和场景）
         sample_images = []
-        prefix = f'sample/user_{user_id}/'
-        for obj in oss2.ObjectIterator(bucket, prefix=prefix):
-            if obj.key.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
-                # 生成公网访问URL
-                url = f"https://{endpoint_full}/{obj.key}"
-                filename = os.path.basename(obj.key)
-                
-                sample_images.append({
-                    'url': url,
-                    'filename': filename,
-                    'size': obj.size,
-                    'key': obj.key
-                })
-        
+        prefixes = [f'sample/person/user_{user_id}/', f'sample/scene/user_{user_id}/']
+        for prefix in prefixes:
+            for obj in oss2.ObjectIterator(bucket, prefix=prefix):
+                if obj.key.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
+                    # 生成公网访问URL
+                    url = f"https://{endpoint_full}/{obj.key}"
+                    filename = os.path.basename(obj.key)
+                    # 推断类别
+                    category = 'person' if '/person/' in obj.key else 'scene'
+                    sample_images.append({
+                        'url': url,
+                        'filename': filename,
+                        'size': obj.size,
+                        'key': obj.key,
+                        'category': category
+                    })
+
         return sample_images
     
     except Exception as e:
@@ -400,24 +403,22 @@ def generate():
             print("  OSS_ACCESS_KEY_ID=你的AccessKeyId")
             print("  OSS_ACCESS_KEY_SECRET=你的AccessKeySecret")
         
-        # 获取 AK/SK
-        ak = os.environ.get('VOLCENGINE_AK') or os.environ.get('VOLCENGINE_ACCESS_KEY')
-        sk = os.environ.get('VOLCENGINE_SK') or os.environ.get('VOLCENGINE_SECRET_KEY')
+        # 获取方舟大模型 API Key
+        api_key = os.environ.get('ARK_API_KEY')
+        base_url = os.environ.get('ARK_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3')
         
-        if not (ak and sk):
-            return jsonify({'error': 'VOLCENGINE_AK 和 VOLCENGINE_SK 未配置'}), 500
+        if not api_key:
+            return jsonify({'error': 'ARK_API_KEY 未配置'}), 500
         
-        # 初始化服务
-        svc = VisualService()
-        svc.set_ak(ak)
-        svc.set_sk(sk)
+        # 初始化 OpenAI 客户端（兼容方舟大模型）
+        client = OpenAI(api_key=api_key, base_url=base_url)
         
         # 生成图片
         generated_images = []
         total_needed = num_images
         
         for i in range(total_needed):
-            # 计算种子（火山引擎 API 限制：最大 99999999）
+            # 计算种子（方舟大模型 API 限制：最大 99999999）
             if seed and seed != 0:
                 per_seed = seed + i
                 # 确保不超过最大值
@@ -426,37 +427,40 @@ def generate():
             else:
                 per_seed = random.randint(1, 99999999)
             
-            # 构建请求体
-            body = {
-                'prompt': prompt,
-                'negative_prompt': negative_prompt,
-                'width': width,
-                'height': height,
-                'steps': steps,
-                'seed': per_seed,
-                'model_version': 'v1',
-                'req_key': 'jimeng_t2i_v40',
-                'num_images': 1,
-                'n': 1,
-                'image_count': 1,
+            # 构建提示词
+            full_prompt = prompt
+            if negative_prompt:
+                full_prompt = f"{prompt}\n负面词: {negative_prompt}"
+            
+            # 根据分辨率映射到方舟大模型支持的size格式
+            size_map = {
+                '1024x1024': '1K',
+                '2048x2048': '2K',
+                '1536x1536': '2K',
             }
+            ark_size = size_map.get(f"{width}x{height}", "2K")
             
-            if image_urls:
-                body['image_urls'] = image_urls
-            
-            # 调用 SDK
+            # 调用方舟大模型生成图片
             try:
-                resp = svc.text2img_xl_sft(body)
+                response = client.images.generate(
+                    model="doubao-seedream-4-5-251128",
+                    prompt=full_prompt,
+                    size=ark_size,
+                    response_format="url",
+                    extra_body={
+                        "watermark": False,
+                    }
+                )
                 
-                # 检查响应
-                if isinstance(resp, dict) and resp.get('code') == 10000:
-                    data = resp.get('data', {})
-                    b64_list = data.get('binary_data_base64', [])
+                # 处理响应
+                if response.data and len(response.data) > 0:
+                    img_url = response.data[0].url
                     
-                    if b64_list:
-                        # 解码并保存图片
-                        img_b64 = b64_list[0]
-                        img_data = base64.b64decode(img_b64)
+                    # 下载图片
+                    import requests
+                    img_response = requests.get(img_url)
+                    if img_response.status_code == 200:
+                        img_data = img_response.content
                         
                         # 生成文件名
                         if num_images > 1:
@@ -498,7 +502,7 @@ def generate():
                         except Exception as db_err:
                             print(f"保存记录失败: {db_err}")
                 else:
-                    print(f"API 返回错误: {resp}")
+                    print(f"API 返回错误: 无法获取图片")
             except Exception as e:
                 print(f"生成第 {i+1} 张图片时出错: {e}")
                 continue
@@ -532,7 +536,54 @@ def get_sample_images():
     """获取 OSS 中的示例图列表（用户隔离）"""
     try:
         user_id = session.get('user_id')
+        category = request.args.get('category')
+        # 先从 OSS 列表中读取（如果配置了 OSS）
         sample_images = list_sample_images_from_oss(user_id)
+
+        # 再从数据库读取人物/场景库中的条目（包含本地保存的备份路径）
+        # 为避免同一文件既存在于 OSS 又存在于数据库中导致重复显示，按 URL 去重
+        try:
+            existing_urls = set([s.get('url') for s in sample_images if s.get('url')])
+
+            person_assets = database.get_person_assets(user_id)
+            for a in person_assets:
+                a_url = a.get('url')
+                if a_url and a_url in existing_urls:
+                    # 已由 OSS 列表包含，跳过添加 DB 条目以避免重复
+                    continue
+                sample_images.append({
+                    'url': a_url,
+                    'filename': a.get('filename'),
+                    'size': None,
+                    'key': f"db_person_{a.get('id')}",
+                    'category': 'person'
+                })
+
+            # 更新已存在 URL 集合
+            existing_urls.update([a.get('url') for a in person_assets if a.get('url')])
+        except Exception:
+            pass
+
+        try:
+            scene_assets = database.get_scene_assets(user_id)
+            for a in scene_assets:
+                a_url = a.get('url')
+                if a_url and a_url in existing_urls:
+                    continue
+                sample_images.append({
+                    'url': a_url,
+                    'filename': a.get('filename'),
+                    'size': None,
+                    'key': f"db_scene_{a.get('id')}",
+                    'category': 'scene'
+                })
+        except Exception:
+            pass
+
+        # 如果请求了特定类别，则过滤
+        if category in ('person', 'scene'):
+            sample_images = [s for s in sample_images if s.get('category') == category]
+
         return jsonify({
             'success': True,
             'images': sample_images
@@ -560,8 +611,14 @@ def records():
 @app.route('/manage-samples')
 @login_required
 def manage_samples():
-    """示例图管理页面"""
+    """素材管理页面"""
     return render_template('manage_samples.html', user=get_current_user())
+
+@app.route('/script-analysis')
+@login_required
+def script_analysis():
+    """剧本分析页面"""
+    return render_template('script_analysis.html', user=get_current_user())
 
 @app.route('/api/batch-generate', methods=['POST'])
 @login_required
@@ -593,17 +650,15 @@ def batch_generate():
         # 准备示例图 URL
         image_urls = [img['url'] for img in sample_images_data if 'url' in img]
         
-        # 获取 AK/SK
-        ak = os.environ.get('VOLCENGINE_AK') or os.environ.get('VOLCENGINE_ACCESS_KEY')
-        sk = os.environ.get('VOLCENGINE_SK') or os.environ.get('VOLCENGINE_SECRET_KEY')
+        # 获取方舟大模型 API Key
+        api_key = os.environ.get('ARK_API_KEY')
+        base_url = os.environ.get('ARK_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3')
         
-        if not (ak and sk):
-            return jsonify({'success': False, 'error': 'VOLCENGINE_AK 和 VOLCENGINE_SK 未配置'}), 500
+        if not api_key:
+            return jsonify({'success': False, 'error': 'ARK_API_KEY 未配置'}), 500
         
-        # 初始化服务
-        svc = VisualService()
-        svc.set_ak(ak)
-        svc.set_sk(sk)
+        # 初始化 OpenAI 客户端
+        client = OpenAI(api_key=api_key, base_url=base_url)
         
         # 生成图片
         generated_images = []
@@ -611,33 +666,38 @@ def batch_generate():
         for i in range(num_images):
             per_seed = random.randint(1, 99999999)
             
-            body = {
-                'prompt': prompt,
-                'negative_prompt': negative_prompt,
-                'width': width,
-                'height': height,
-                'steps': 28,
-                'seed': per_seed,
-                'model_version': 'v1',
-                'req_key': 'jimeng_t2i_v40',
-                'num_images': 1,
-                'n': 1,
-                'image_count': 1,
-            }
+            # 构建提示词
+            full_prompt = prompt
+            if negative_prompt:
+                full_prompt = f"{prompt}\n负面词: {negative_prompt}"
             
-            if image_urls:
-                body['image_urls'] = image_urls
+            # 根据分辨率映射到方舟大模型支持的size格式
+            size_map = {
+                '1024x1024': '1K',
+                '2048x2048': '2K',
+                '1536x1536': '2K',
+            }
+            ark_size = size_map.get(f"{width}x{height}", "2K")
             
             try:
-                resp = svc.text2img_xl_sft(body)
+                response = client.images.generate(
+                    model="doubao-seedream-4-5-251128",
+                    prompt=full_prompt,
+                    size=ark_size,
+                    response_format="url",
+                    extra_body={
+                        "watermark": False,
+                    }
+                )
                 
-                if isinstance(resp, dict) and resp.get('code') == 10000:
-                    data_resp = resp.get('data', {})
-                    b64_list = data_resp.get('binary_data_base64', [])
+                if response.data and len(response.data) > 0:
+                    img_url = response.data[0].url
                     
-                    if b64_list:
-                        img_b64 = b64_list[0]
-                        img_data = base64.b64decode(img_b64)
+                    # 下载图片
+                    import requests
+                    img_response = requests.get(img_url)
+                    if img_response.status_code == 200:
+                        img_data = img_response.content
                         
                         if num_images > 1:
                             filename = f"{filename_base}_{i+1}.jpg"
@@ -795,9 +855,12 @@ def upload_sample_image():
         if not bucket:
             return jsonify({'success': False, 'error': 'OSS 配置不完整'}), 500
         
-        # 生成对象键 - 按用户隔离保存到 sample/user_{user_id}/ 目录
+        # 生成对象键 - 按用户与类别保存到 sample/{category}/user_{user_id}/ 目录
         filename = secure_filename(file.filename)
-        object_key = f"sample/user_{user_id}/{filename}"
+        category = request.form.get('category', 'person')
+        if category not in ('person', 'scene'):
+            category = 'person'
+        object_key = f"sample/{category}/user_{user_id}/{filename}"
         
         # 上传文件到 OSS
         import oss2
@@ -832,9 +895,9 @@ def delete_sample_image():
         if not key:
             return jsonify({'success': False, 'error': '缺少文件 key'}), 400
         
-        # 验证 key 是否属于当前用户
-        expected_prefix = f'sample/user_{user_id}/'
-        if not key.startswith(expected_prefix):
+        # 验证 key 是否属于当前用户（支持 person/scene 两类）
+        allowed_prefixes = [f'sample/person/user_{user_id}/', f'sample/scene/user_{user_id}/']
+        if not any(key.startswith(p) for p in allowed_prefixes):
             return jsonify({'success': False, 'error': '无权删除此文件'}), 403
         
         # 获取 OSS 配置
@@ -849,6 +912,171 @@ def delete_sample_image():
     
     except Exception as e:
         print(f"删除示例图失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/delete-library-asset', methods=['POST'])
+@login_required
+def delete_library_asset():
+    """删除数据库中人物/场景库的条目（key 格式: db_person_<id> 或 db_scene_<id>）"""
+    try:
+        data = request.get_json() or {}
+        key = data.get('key')
+        user_id = session.get('user_id')
+
+        if not key:
+            return jsonify({'success': False, 'error': '缺少 key'}), 400
+
+        if key.startswith('db_person_'):
+            aid = int(key.split('_')[-1])
+            # 删除数据库记录
+            try:
+                # 若存在本地文件路径，尝试删除
+                conn_asset = database.get_person_assets(user_id)
+            except Exception:
+                conn_asset = []
+
+            database.delete_person_asset(aid)
+            return jsonify({'success': True})
+        elif key.startswith('db_scene_'):
+            aid = int(key.split('_')[-1])
+            try:
+                conn_asset = database.get_scene_assets(user_id)
+            except Exception:
+                conn_asset = []
+            database.delete_scene_asset(aid)
+            return jsonify({'success': True})
+        else:
+            return jsonify({'success': False, 'error': '不支持的 key 类型'}), 400
+    except Exception as e:
+        print(f"删除库条目失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/add-to-person-library', methods=['POST'])
+@login_required
+def add_to_person_library():
+    """将指定图片保存到人物库（OSS 或本地备份）并写入数据库"""
+    try:
+        user_id = session.get('user_id')
+        data = request.get_json() or {}
+        url = data.get('url')
+        filename = secure_filename(data.get('filename') or os.path.basename(url or ''))
+
+        if not url:
+            return jsonify({'success': False, 'error': '缺少 url'}), 400
+
+        # 尝试将文件上传到 OSS（如果配置了 OSS）
+        bucket, endpoint_full = get_oss_bucket()
+        target_key = f'sample/person/user_{user_id}/{filename}'
+        public_url = None
+
+        # 如果是本地输出路径（/output/...），直接读取并上传
+        if url.startswith('/output/') and os.path.exists(url.lstrip('/')):
+            local_path = url.lstrip('/')
+            if bucket:
+                with open(local_path, 'rb') as fh:
+                    bucket.put_object(target_key, fh.read())
+                public_url = f'https://{endpoint_full}/{target_key}'
+            else:
+                # 保存到本地 uploads 目录作为备份
+                dest_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'sample', 'person', f'user_{user_id}')
+                os.makedirs(dest_dir, exist_ok=True)
+                dest_path = os.path.join(dest_dir, filename)
+                import shutil
+                shutil.copy(local_path, dest_path)
+                public_url = '/' + dest_path.replace('\\', '/')
+        else:
+            # 若为远程 URL，尝试下载再上传
+            import requests
+            resp = requests.get(url, timeout=10)
+            if resp.status_code == 200:
+                if bucket:
+                    bucket.put_object(target_key, resp.content)
+                    public_url = f'https://{endpoint_full}/{target_key}'
+                else:
+                    dest_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'sample', 'person', f'user_{user_id}')
+                    os.makedirs(dest_dir, exist_ok=True)
+                    dest_path = os.path.join(dest_dir, filename)
+                    with open(dest_path, 'wb') as fh:
+                        fh.write(resp.content)
+                    public_url = '/' + dest_path.replace('\\', '/')
+            else:
+                return jsonify({'success': False, 'error': '无法下载远程图片'}), 400
+
+        # 写入数据库记录
+        try:
+            database.save_person_asset(user_id, filename, public_url, meta={'source_url': url})
+        except Exception as e:
+            print(f"保存人物库记录失败: {e}")
+
+        return jsonify({'success': True, 'url': public_url, 'filename': filename})
+    except Exception as e:
+        print(f"添加到人物库失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/add-to-scene-library', methods=['POST'])
+@login_required
+def add_to_scene_library():
+    """将指定图片保存到场景库（OSS 或本地备份）并写入数据库"""
+    try:
+        user_id = session.get('user_id')
+        data = request.get_json() or {}
+        url = data.get('url')
+        filename = secure_filename(data.get('filename') or os.path.basename(url or ''))
+
+        if not url:
+            return jsonify({'success': False, 'error': '缺少 url'}), 400
+
+        bucket, endpoint_full = get_oss_bucket()
+        target_key = f'sample/scene/user_{user_id}/{filename}'
+        public_url = None
+
+        if url.startswith('/output/') and os.path.exists(url.lstrip('/')):
+            local_path = url.lstrip('/')
+            if bucket:
+                with open(local_path, 'rb') as fh:
+                    bucket.put_object(target_key, fh.read())
+                public_url = f'https://{endpoint_full}/{target_key}'
+            else:
+                dest_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'sample', 'scene', f'user_{user_id}')
+                os.makedirs(dest_dir, exist_ok=True)
+                dest_path = os.path.join(dest_dir, filename)
+                import shutil
+                shutil.copy(local_path, dest_path)
+                public_url = '/' + dest_path.replace('\\', '/')
+        else:
+            import requests
+            resp = requests.get(url, timeout=10)
+            if resp.status_code == 200:
+                if bucket:
+                    bucket.put_object(target_key, resp.content)
+                    public_url = f'https://{endpoint_full}/{target_key}'
+                else:
+                    dest_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'sample', 'scene', f'user_{user_id}')
+                    os.makedirs(dest_dir, exist_ok=True)
+                    dest_path = os.path.join(dest_dir, filename)
+                    with open(dest_path, 'wb') as fh:
+                        fh.write(resp.content)
+                    public_url = '/' + dest_path.replace('\\', '/')
+            else:
+                return jsonify({'success': False, 'error': '无法下载远程图片'}), 400
+
+        try:
+            database.save_scene_asset(user_id, filename, public_url, meta={'source_url': url})
+        except Exception as e:
+            print(f"保存场景库记录失败: {e}")
+
+        return jsonify({'success': True, 'url': public_url, 'filename': filename})
+    except Exception as e:
+        print(f"添加到场景库失败: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -974,81 +1202,90 @@ def process_single_batch_task(task, batch_id, user_id):
         # 准备示例图 URL
         image_urls = [img['url'] for img in sample_images_data if 'url' in img]
         
-        # 获取 AK/SK
-        ak = os.environ.get('VOLCENGINE_AK') or os.environ.get('VOLCENGINE_ACCESS_KEY')
-        sk = os.environ.get('VOLCENGINE_SK') or os.environ.get('VOLCENGINE_SECRET_KEY')
+        # 获取方舟大模型 API Key
+        api_key = os.environ.get('ARK_API_KEY')
+        base_url = os.environ.get('ARK_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3')
         
-        if not (ak and sk):
-            return {'success': False, 'error': 'VOLCENGINE_AK 和 VOLCENGINE_SK 未配置'}
+        if not api_key:
+            return {'success': False, 'error': 'ARK_API_KEY 未配置'}
         
-        # 初始化服务
-        svc = VisualService()
-        svc.set_ak(ak)
-        svc.set_sk(sk)
+        # 初始化 OpenAI 客户端
+        client = OpenAI(api_key=api_key, base_url=base_url)
         
         # 生成图片
         for i in range(num_images):
             per_seed = random.randint(1, 99999999)
             
-            body = {
-                'prompt': prompt,
-                'negative_prompt': negative_prompt,
-                'width': width,
-                'height': height,
-                'steps': 28,
-                'seed': per_seed,
-                'model_version': 'v1',
-                'req_key': 'jimeng_t2i_v40',
-                'num_images': 1,
+            # 构建提示词
+            full_prompt = prompt
+            if negative_prompt:
+                full_prompt = f"{prompt}\n负面词: {negative_prompt}"
+            
+            # 根据分辨率映射到方舟大模型支持的size格式
+            size_map = {
+                '1024x1024': '1K',
+                '2048x2048': '2K',
+                '1536x1536': '2K',
             }
+            ark_size = size_map.get(f"{width}x{height}", "2K")
             
-            if image_urls:
-                body['image_urls'] = image_urls
-            
-            resp = svc.text2img_xl_sft(body)
-            
-            if isinstance(resp, dict) and resp.get('code') == 10000:
-                data_resp = resp.get('data', {})
-                b64_list = data_resp.get('binary_data_base64', [])
+            try:
+                response = client.images.generate(
+                    model="doubao-seedream-4-5-251128",
+                    prompt=full_prompt,
+                    size=ark_size,
+                    response_format="url",
+                    extra_body={
+                        "watermark": False,
+                    }
+                )
                 
-                if b64_list:
-                    img_b64 = b64_list[0]
-                    img_data = base64.b64decode(img_b64)
+                if response.data and len(response.data) > 0:
+                    img_url = response.data[0].url
                     
-                    if num_images > 1:
-                        filename = f"{filename_base}_{i+1}.jpg"
-                    else:
-                        filename = f"{filename_base}.jpg"
+                    # 下载图片
+                    import requests
+                    img_response = requests.get(img_url)
+                    if img_response.status_code == 200:
+                        img_data = img_response.content
                     
-                    # 使用用户专属输出目录
-                    user_output_folder = os.path.join('output', str(user_id))
-                    os.makedirs(user_output_folder, exist_ok=True)
-                    filepath = os.path.join(user_output_folder, filename)
-                    with open(filepath, 'wb') as f:
-                        f.write(img_data)
-                    
-                    # 上传到 OSS
-                    oss_url = upload_to_aliyun_oss(filepath)
-                    
-                    # 保存记录
-                    if oss_url:
-                        database.save_generation_record({
-                            'user_id': user_id,
-                            'prompt': prompt,
-                            'negative_prompt': negative_prompt,
-                            'aspect_ratio': aspect_ratio,
-                            'resolution': resolution,
-                            'width': width,
-                            'height': height,
-                            'num_images': 1,
-                            'seed': per_seed,
-                            'steps': 28,
-                            'sample_images': sample_images_data,
-                            'image_path': oss_url,
-                            'filename': filename,
-                            'batch_id': batch_id,
-                            'status': 'success'
-                        })
+                        if num_images > 1:
+                            filename = f"{filename_base}_{i+1}.jpg"
+                        else:
+                            filename = f"{filename_base}.jpg"
+                        
+                        # 使用用户专属输出目录
+                        user_output_folder = os.path.join('output', str(user_id))
+                        os.makedirs(user_output_folder, exist_ok=True)
+                        filepath = os.path.join(user_output_folder, filename)
+                        with open(filepath, 'wb') as f:
+                            f.write(img_data)
+                        
+                        # 上传到 OSS
+                        oss_url = upload_to_aliyun_oss(filepath)
+                        
+                        # 保存记录
+                        if oss_url:
+                            database.save_generation_record({
+                                'user_id': user_id,
+                                'prompt': prompt,
+                                'negative_prompt': negative_prompt,
+                                'aspect_ratio': aspect_ratio,
+                                'resolution': resolution,
+                                'width': width,
+                                'height': height,
+                                'num_images': 1,
+                                'seed': per_seed,
+                                'steps': 28,
+                                'sample_images': sample_images_data,
+                                'image_path': oss_url,
+                                'filename': filename,
+                                'batch_id': batch_id,
+                                'status': 'success'
+                            })
+            except Exception as e:
+                print(f"生成第 {i+1} 张图片时出错: {e}")
+                continue
         
         return {'success': True}
     
@@ -1091,6 +1328,121 @@ def output_file(user_id, filename):
 @app.route('/favicon.ico')
 def favicon():
     return '', 204  # 返回空响应，避免 404
+
+@app.route('/api/analyze-script', methods=['POST'])
+@login_required
+def analyze_script():
+    """使用火山引擎大模型分析剧本，拆解人物和分镜场景"""
+    try:
+        data = request.get_json() or {}
+        script = data.get('script', '').strip()
+        
+        if not script:
+            return jsonify({'success': False, 'error': '请输入剧本文本'}), 400
+        
+        # 获取火山引擎 API Key
+        api_key = os.environ.get('ARK_API_KEY')
+        base_url = os.environ.get('ARK_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3')
+        
+        if not api_key:
+            return jsonify({'success': False, 'error': 'ARK_API_KEY 未配置'}), 500
+        
+        # 初始化 OpenAI 兼容客户端
+        client = OpenAI(api_key=api_key, base_url=base_url)
+        
+        # 构建分析提示词
+        analysis_prompt = f"""请分析以下剧本文本，并以JSON格式输出结果。
+
+剧本文本：
+{script}
+
+请提取以下信息，并以JSON格式返回（不要包含markdown代码块，直接返回JSON）：
+{{
+  "characters": [
+    {{
+      "name": "人物名称",
+      "description": "人物设定、性格、背景等描述"
+    }}
+  ],
+  "scenes": [
+    {{
+      "location": "场景位置",
+      "description": "场景描述、动作、对话等",
+      "characters": ["出场人物1", "出场人物2"],
+      "setting": "场景视觉设定、布景、灯光等"
+    }}
+  ]
+}}
+
+要求：
+1. 仔细识别所有人物及其设定
+2. 按照剧本顺序拆解分镜场景
+3. 为每个场景提供清晰的视觉描述，便于AI图片生成
+4. 返回有效的JSON格式"""
+        
+        # 调用火山引擎大模型
+        response = client.chat.completions.create(
+            model="doubao-seed-1-8-251215",
+            messages=[
+                {
+                    "role": "user",
+                    "content": analysis_prompt
+                }
+            ],
+            temperature=0.7,
+            top_p=0.9
+        )
+        
+        # 提取模型返回的内容
+        if response.choices and len(response.choices) > 0:
+            content = response.choices[0].message.content.strip()
+            
+            # 尝试解析 JSON
+            import json
+            try:
+                # 移除可能的 markdown 代码块包装
+                if content.startswith('```'):
+                    content = content.split('```')[1]
+                    if content.startswith('json'):
+                        content = content[4:]
+                    content = content.strip()
+                if content.endswith('```'):
+                    content = content[:-3].strip()
+                
+                result = json.loads(content)
+                
+                # 验证结构
+                if 'characters' not in result:
+                    result['characters'] = []
+                if 'scenes' not in result:
+                    result['scenes'] = []
+                
+                return jsonify({
+                    'success': True,
+                    'result': result
+                })
+            except json.JSONDecodeError as e:
+                print(f"JSON 解析失败: {e}")
+                print(f"返回内容: {content}")
+                # 返回原始内容作为错误提示
+                return jsonify({
+                    'success': False,
+                    'error': f'模型返回格式错误: {str(e)}'
+                }), 500
+        else:
+            return jsonify({
+                'success': False,
+                'error': '模型未返回内容'
+            }), 500
+    
+    except Exception as e:
+        print(f"剧本分析失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'分析失败: {str(e)}'
+        }), 500
 
 if __name__ == '__main__':
     print("启动 Web 应用...")

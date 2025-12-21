@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>示例图管理 - AI 图片生成器</title>
+    <title>素材管理 - AI 图片生成器</title>
     <style>
         * {
             margin: 0;
@@ -453,7 +453,8 @@
         <a href="/">🎨 单图生成</a>
         <a href="/batch">📦 批量生成</a>
         <a href="/records">📊 生成记录</a>
-        <a href="/manage-samples" class="active">🖼️ 示例图管理</a>
+        <a href="/script-analysis">🎬 剧本分析</a>
+        <a href="/manage-samples" class="active">🖼️ 素材管理</a>
         {% if user.username == 'system_admin' %}
         <a href="/stats">📈 系统统计</a>
         {% endif %}
@@ -465,12 +466,20 @@
     
     <div class="container">
         <div class="header">
-            <h1>🖼️ 示例图管理</h1>
+            <h1>🖼️ 素材管理</h1>
             <p>上传、预览、删除 OSS 中的示例图片</p>
         </div>
         
         <div class="content">
             <!-- 上传区域 -->
+            <div style="display:flex; gap:12px; margin-bottom:12px; align-items:center;">
+                <div>
+                    <button class="btn btn-primary" id="libPersonBtn">人物库</button>
+                    <button class="btn" id="libSceneBtn">场景库</button>
+                </div>
+                <div style="margin-left:auto; color:#666; font-weight:600;">当前库: <span id="currentCategory">人物库</span></div>
+            </div>
+
             <div class="upload-section" id="uploadArea" onclick="document.getElementById('fileInput').click()">
                 <div class="upload-icon">📤</div>
                 <div class="upload-text">点击上传或拖拽图片到这里</div>
@@ -533,7 +542,21 @@
         let selectedImages = new Set();
         
         // 页面加载时获取图片列表
-        document.addEventListener('DOMContentLoaded', loadImages);
+        let currentCategory = 'person';
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('libPersonBtn').addEventListener('click', () => switchCategory('person'));
+            document.getElementById('libSceneBtn').addEventListener('click', () => switchCategory('scene'));
+            loadImages();
+        });
+
+        function switchCategory(cat) {
+            currentCategory = cat;
+            document.getElementById('currentCategory').textContent = cat === 'person' ? '人物库' : '场景库';
+            // 按钮样式
+            document.getElementById('libPersonBtn').classList.toggle('btn-primary', cat === 'person');
+            document.getElementById('libSceneBtn').classList.toggle('btn-primary', cat === 'scene');
+            loadImages();
+        }
         
         // 加载图片列表
         async function loadImages() {
@@ -546,7 +569,7 @@
             grid.innerHTML = '';
             
             try {
-                const response = await fetch('/api/sample-images');
+                const response = await fetch('/api/sample-images?category=' + encodeURIComponent(currentCategory));
                 const data = await response.json();
                 
                 if (data.success) {
@@ -674,21 +697,28 @@
             }
         }
         
-        // 删除单张图片
+        // 删除单张图片（支持 OSS 对象与数据库库条目）
         async function deleteImage(key, filename) {
             if (!confirm(`确定要删除 "${filename}" 吗？`)) return;
-            
+
             try {
-                const response = await fetch('/api/delete-sample-image', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ key: key })
-                });
-                
-                const result = await response.json();
-                
+                let response, result;
+                if (key && (key.startsWith('db_person_') || key.startsWith('db_scene_'))) {
+                    response = await fetch('/api/delete-library-asset', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ key: key })
+                    });
+                } else {
+                    response = await fetch('/api/delete-sample-image', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ key: key })
+                    });
+                }
+
+                result = await response.json();
+
                 if (result.success) {
                     alert('删除成功');
                     loadImages();
@@ -711,24 +741,13 @@
             let failCount = 0;
             
             for (const key of keys) {
-                try {
-                    const response = await fetch('/api/delete-sample-image', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({ key: key })
-                    });
-                    
-                    const result = await response.json();
-                    if (result.success) {
+                    try {
+                        // 使用统一的 deleteImage 逻辑（支持 OSS 与 DB 条目）
+                        await deleteImage(key, '选中项');
                         successCount++;
-                    } else {
+                    } catch (error) {
                         failCount++;
                     }
-                } catch (error) {
-                    failCount++;
-                }
             }
             
             alert(`删除完成\n成功: ${successCount} 张\n失败: ${failCount} 张`);
@@ -788,6 +807,7 @@
                 try {
                     const formData = new FormData();
                     formData.append('file', file);
+                    formData.append('category', currentCategory);
                     
                     const response = await fetch('/api/upload-sample-image', {
                         method: 'POST',

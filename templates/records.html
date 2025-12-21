@@ -222,6 +222,23 @@
         .delete-btn:hover {
             background: #c82333;
         }
+        .add-lib-btn {
+            padding: 6px 10px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85em;
+            margin-left: 6px;
+        }
+        .add-lib-btn.person {
+            background: #17a2b8;
+        }
+        .add-lib-btn.scene {
+            background: #6f42c1;
+        }
+        .add-lib-btn:hover { opacity: 0.9; }
         
         .prompt-cell {
             max-width: 300px;
@@ -385,7 +402,8 @@
         <a href="/">🎨 单图生成</a>
         <a href="/batch">📦 批量生成</a>
         <a href="/records" class="active">📊 生成记录</a>
-        <a href="/manage-samples">🖼️ 示例图管理</a>
+        <a href="/script-analysis">🎬 剧本分析</a>
+        <a href="/manage-samples">🖼️ 素材管理</a>
         {% if user.username == 'system_admin' %}
         <a href="/stats">📈 系统统计</a>
         {% endif %}
@@ -581,6 +599,8 @@
                         <button class="delete-btn" onclick="deleteRecord(${record.id})">
                             🗑️ 删除
                         </button>
+                        <button class="add-lib-btn person" onclick="addToPersonLibrary(${index})" title="添加到人物库">👤 人物库</button>
+                        <button class="add-lib-btn scene" onclick="addToSceneLibrary(${index})" title="添加到场景库">🏙️ 场景库</button>
                     </td>
                 `;
                 
@@ -873,6 +893,54 @@
             } finally {
                 btn.disabled = false;
                 btn.innerHTML = originalText;
+            }
+        }
+
+        // 添加到人物库
+        async function addToPersonLibrary(index) {
+            const record = records[index];
+            if (!record) return alert('记录不存在');
+            if (!confirm('将图片添加到人物库？')) return;
+
+            try {
+                const resp = await fetch('/api/add-to-person-library', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: record.image_path, filename: record.filename })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    alert('已添加到人物库');
+                } else {
+                    alert('添加到人物库失败: ' + (data.error || data.message || '未知错误'));
+                }
+            } catch (e) {
+                console.error('添加到人物库出错:', e);
+                alert('添加到人物库请求失败');
+            }
+        }
+
+        // 添加到场景库
+        async function addToSceneLibrary(index) {
+            const record = records[index];
+            if (!record) return alert('记录不存在');
+            if (!confirm('将图片添加到场景库？')) return;
+
+            try {
+                const resp = await fetch('/api/add-to-scene-library', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: record.image_path, filename: record.filename })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    alert('已添加到场景库');
+                } else {
+                    alert('添加到场景库失败: ' + (data.error || data.message || '未知错误'));
+                }
+            } catch (e) {
+                console.error('添加到场景库出错:', e);
+                alert('添加到场景库请求失败');
             }
         }
     </script>

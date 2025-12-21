@@ -442,7 +442,8 @@
         <a href="/" class="active">🎨 单图生成</a>
         <a href="/batch">📦 批量生成</a>
         <a href="/records">📊 生成记录</a>
-        <a href="/manage-samples">🖼️ 示例图管理</a>
+        <a href="/script-analysis">🎬 剧本分析</a>
+        <a href="/manage-samples">🖼️ 素材管理</a>
         {% if user.username == 'system_admin' %}
         <a href="/stats">📈 系统统计</a>
         {% endif %}
@@ -474,8 +475,12 @@
                     </div>
                     
                     <div class="sample-images-section">
-                        <div class="sample-images-title">
-                            🖼️ 选择示例图片（从OSS）
+                        <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
+                            <div class="sample-images-title">🖼️ 选择示例图片（从OSS）</div>
+                            <div style="margin-left: auto; display:flex; gap:8px;">
+                                <button type="button" id="samplePersonBtn" class="btn btn-primary">人物库</button>
+                                <button type="button" id="sampleSceneBtn" class="btn">场景库</button>
+                            </div>
                         </div>
                         <div class="sample-images-grid" id="sampleImagesGrid">
                             <div class="sample-images-loading">加载中...</div>
@@ -551,6 +556,13 @@
                     <button type="submit" class="generate-btn" id="generateBtn">
                         🚀 开始生成
                     </button>
+                    <div style="margin-top:10px; display:flex; gap:8px; align-items:center;">
+                        <button type="button" id="clearCacheBtn" class="btn btn-secondary" onclick="clearIndexCache()">清除本地缓存</button>
+                        <label style="display:flex; align-items:center; gap:6px; margin-left:8px; font-size:0.9em; color:#666;">
+                            <input type="checkbox" id="autoClearOnReload">
+                            刷新时自动清除缓存
+                        </label>
+                    </div>
                 </form>
             </div>
             
@@ -814,10 +826,18 @@
                         <a href="${img.url}" download="${img.filename}">
                             <button class="download-btn">⬇️ 下载图片</button>
                         </a>
+                        <button class="download-btn" onclick="addToPersonLibrary('${img.url}', '${img.filename}')">➕ 添加到人物库</button>
+                        <button class="download-btn" onclick="addToSceneLibrary('${img.url}', '${img.filename}')">➕ 添加到场景库</button>
+                        <button class="download-btn" onclick="regenerateLast()">🔁 重新生成</button>
                     </div>
                 `;
                 resultImages.appendChild(div);
             });
+            // 保存最后一次生成的参数，便于重新生成
+            try {
+                const payload = buildLastGeneratePayload();
+                localStorage.setItem('lastGenerationPayload', JSON.stringify(payload));
+            } catch (e) { console.error('保存最后生成参数失败', e); }
         }
         
         // 拖拽上传
@@ -833,6 +853,9 @@
         });
         
         uploadArea.addEventListener('drop', (e) => {
+                        // 在提交前保存本次生成参数（不包含本地文件）
+                        const payloadToSave = buildLastGeneratePayload();
+                        localStorage.setItem('lastGenerationPayload', JSON.stringify(payloadToSave));
             e.preventDefault();
             uploadArea.style.backgroundColor = '#f8f9ff';
             
@@ -847,18 +870,29 @@
             updatePreview();
         });
         
-        // 加载示例图片
-        async function loadSampleImages() {
+        // 示例图类别（person/scene）
+        let sampleCategory = 'person';
+
+        
+
+        function switchSampleCategory(cat) {
+            sampleCategory = cat;
+            document.getElementById('samplePersonBtn').classList.toggle('btn-primary', cat === 'person');
+            document.getElementById('sampleSceneBtn').classList.toggle('btn-primary', cat === 'scene');
+            loadSampleImages(cat);
+        }
+
+        // 加载示例图片（按类别）
+        async function loadSampleImages(category) {
             const grid = document.getElementById('sampleImagesGrid');
-            
+            grid.innerHTML = '<div class="sample-images-loading">加载中...</div>';
             try {
-                const response = await fetch('/api/sample-images');
+                const response = await fetch('/api/sample-images?category=' + encodeURIComponent(category));
                 const data = await response.json();
-                
+
                 if (data.success && data.images.length > 0) {
                     sampleImages = data.images;
                     grid.innerHTML = '';
-                    
                     data.images.forEach((img, index) => {
                         const div = document.createElement('div');
                         div.className = 'sample-image-item';
@@ -875,6 +909,44 @@
             } catch (error) {
                 console.error('加载示例图失败:', error);
                 grid.innerHTML = '<div class="sample-images-loading">❌ 加载失败</div>';
+            }
+        }
+
+        // 将生成图片添加到人物/素材库
+        async function addToPersonLibrary(url, filename) {
+            try {
+                const resp = await fetch('/api/add-to-person-library', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: url, filename: filename })
+                });
+                const data = await resp.json();
+                    if (data.success) {
+                    alert('已添加到人物库');
+                } else {
+                    alert('添加失败: ' + (data.error || '未知错误'));
+                }
+            } catch (e) {
+                alert('添加失败: ' + e.message);
+            }
+        }
+
+        // 将生成图片添加到场景库
+        async function addToSceneLibrary(url, filename) {
+            try {
+                const resp = await fetch('/api/add-to-scene-library', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: url, filename: filename })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    alert('已添加到场景库');
+                } else {
+                    alert('添加失败: ' + (data.error || '未知错误'));
+                }
+            } catch (e) {
+                alert('添加失败: ' + e.message);
             }
         }
         
@@ -920,7 +992,15 @@
         
         // 页面加载时获取示例图和恢复表单数据
         document.addEventListener('DOMContentLoaded', function() {
-            loadSampleImages();
+            // 初始化类别按钮
+            const btnP = document.getElementById('samplePersonBtn');
+            const btnS = document.getElementById('sampleSceneBtn');
+            if (btnP && btnS) {
+                btnP.addEventListener('click', () => switchSampleCategory('person'));
+                btnS.addEventListener('click', () => switchSampleCategory('scene'));
+            }
+            // 默认加载
+            loadSampleImages(sampleCategory);
             loadFormData();
             setupAutoSave();
         });
