@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 图片生成器</title>
+    <script src="/static/state-manager.js"></script>
     <style>
         * {
             margin: 0;
@@ -672,6 +673,7 @@
         // 保持连接活跃，防止页面切换时中断请求
         let keepAliveController = null;
         let currentGenerationState = null;
+        let generateAbortController = null;
         
         // 页面加载时恢复生成状态
         window.addEventListener('load', function() {
@@ -696,6 +698,13 @@
                     console.error('恢复生成状态失败:', e);
                 }
             }
+            
+            // 页面卸载时取消未完成的生成请求
+            window.addEventListener('beforeunload', () => {
+                if (generateAbortController) {
+                    generateAbortController.abort();
+                }
+            });
         });
         
         document.getElementById('generateForm').addEventListener('submit', async function(e) {
@@ -706,7 +715,16 @@
             const resultImages = document.getElementById('resultImages');
             const generateBtn = document.getElementById('generateBtn');
             
+            // 如果有正在进行的请求，先取消它
+            if (generateAbortController) {
+                generateAbortController.abort();
+            }
+            
+            // 创建新的 AbortController
+            generateAbortController = new AbortController();
+            
             // 开始新的生成，清空之前的结果和状态
+
             errorMessage.classList.remove('active');
             loading.classList.add('active');
             resultImages.innerHTML = '';
@@ -733,10 +751,11 @@
             });
             
             try {
-                // 使用 keepalive 选项，确保即使页面关闭请求也会完成
+                // 使用 AbortSignal 和 keepalive 选项，确保请求能完成
                 const response = await fetch('/generate', {
                     method: 'POST',
                     body: formData,
+                    signal: generateAbortController.signal,
                     keepalive: true  // 关键：保持请求活跃
                 });
                 
@@ -768,12 +787,24 @@
                     }
                 }
             } catch (error) {
-                errorMessage.textContent = '生成失败: ' + error.message;
+                // 判断是否是由于页面卸载导致的中止
+                if (error.name === 'AbortError') {
+                    console.log('生成被中止（可能是页面切换）');
+                    // 不显示错误信息，直接返回
+                    return;
+                }
+                
+                let errorMsg = error.message;
+                if (error.message === 'Failed to fetch') {
+                    errorMsg = '网络连接失败。如果您切换了页面，请重新提交生成请求。';
+                }
+                
+                errorMessage.textContent = '生成失败: ' + errorMsg;
                 errorMessage.classList.add('active');
                 // 更新状态为失败
                 currentGenerationState = {
                     status: 'failed',
-                    error: error.message,
+                    error: errorMsg,
                     startTime: currentGenerationState ? currentGenerationState.startTime : Date.now()
                 };
                 localStorage.setItem('singleGenerationState', JSON.stringify(currentGenerationState));
@@ -781,6 +812,8 @@
                 loading.classList.remove('active');
                 generateBtn.disabled = false;
                 generateBtn.textContent = '🚀 开始生成';
+                // 清空 AbortController
+                generateAbortController = null;
             }
         });
         

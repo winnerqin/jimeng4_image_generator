@@ -4,6 +4,7 @@ import base64
 import random
 import uuid
 import threading
+import logging
 from datetime import datetime
 from pathlib import Path
 from functools import wraps
@@ -11,6 +12,47 @@ from flask import Flask, render_template, request, jsonify, send_from_directory,
 from werkzeug.utils import secure_filename
 from openai import OpenAI
 import database
+
+# ==================== 日志工具 ====================
+# 配置日志记录
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - [%(levelname)s] - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.FileHandler('app.log', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+def log_operation(operation, details=None, level='INFO'):
+    """记录操作日志"""
+    msg = f"[操作] {operation}"
+    if details:
+        msg += f" | {details}"
+    if level == 'ERROR':
+        logger.error(msg)
+    elif level == 'WARNING':
+        logger.warning(msg)
+    else:
+        logger.info(msg)
+
+def log_request(method, endpoint, user_id=None, params=None):
+    """记录请求"""
+    msg = f"[请求] {method} {endpoint}"
+    if user_id:
+        msg += f" | 用户: {user_id}"
+    if params:
+        msg += f" | 参数: {params}"
+    logger.info(msg)
+
+def log_response(endpoint, status, message=None):
+    """记录响应"""
+    msg = f"[响应] {endpoint} | 状态: {status}"
+    if message:
+        msg += f" | {message}"
+    logger.info(msg)
 
 # 全局变量：存储批量任务进度
 batch_progress = {}
@@ -257,15 +299,20 @@ def login():
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
         
+        log_request('POST', '/login', params=f'username={username}')
+        
         if not username or not password:
+            log_operation('登录失败', '缺少用户名或密码', 'WARNING')
             return render_template('login.html', error='请输入用户名和密码')
         
         user = database.verify_user(username, password)
         if user:
             session['user_id'] = user['id']
             session['username'] = user['username']
+            log_operation('用户登录成功', f'用户名: {username}, 用户ID: {user["id"]}')
             return redirect(url_for('index'))
         else:
+            log_operation('登录失败', f'用户名: {username}, 密码错误', 'WARNING')
             return render_template('login.html', error='用户名或密码错误')
     
     return render_template('login.html')
@@ -273,10 +320,14 @@ def login():
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     # 注册功能已禁用，请联系管理员创建账号
+    log_operation('注册尝试被拒绝', '注册功能已关闭', 'WARNING')
     return render_template('login.html', error='注册功能已关闭，请联系管理员获取账号')
 
 @app.route('/logout')
 def logout():
+    user = get_current_user()
+    user_info = f"用户ID: {session.get('user_id')}, 用户名: {session.get('username')}" if user else "未知用户"
+    log_operation('用户登出', user_info)
     session.clear()
     return redirect(url_for('login'))
 
@@ -348,7 +399,11 @@ def generate():
         steps = int(request.form.get('steps', 28))
         seed = int(request.form.get('seed', 0))
         
+        log_request('POST', '/generate', user_id, 
+                   f'提示词长度={len(prompt)}, 数量={num_images}, 尺寸={aspect_ratio}/{resolution}')
+        
         if not prompt:
+            log_operation('生成失败', f'用户ID: {user_id}, 原因: 缺少提示词', 'WARNING')
             return jsonify({'error': '请输入提示词'}), 400
         
         # 获取尺寸
@@ -508,8 +563,10 @@ def generate():
                 continue
         
         if not generated_images:
+            log_operation('生成失败', f'用户ID: {user_id}, 原因: 无法生成图片', 'ERROR')
             return jsonify({'error': '图片生成失败，请检查参数'}), 500
         
+        log_operation('图片生成成功', f'用户ID: {user_id}, 生成数量: {len(generated_images)}, 提示词: {prompt[:50]}...')
         return jsonify({
             'success': True,
             'images': generated_images,
@@ -525,7 +582,8 @@ def generate():
         })
     
     except Exception as e:
-        print(f"错误: {e}")
+        user_id = session.get('user_id')
+        log_operation('生成异常', f'用户ID: {user_id}, 错误: {str(e)}', 'ERROR')
         import traceback
         traceback.print_exc()
         return jsonify({'error': f'服务器错误: {str(e)}'}), 500
@@ -537,6 +595,8 @@ def get_sample_images():
     try:
         user_id = session.get('user_id')
         category = request.args.get('category')
+        log_request('GET', '/api/sample-images', user_id, f'类别: {category or "全部"}')
+        
         # 先从 OSS 列表中读取（如果配置了 OSS）
         sample_images = list_sample_images_from_oss(user_id)
 
@@ -584,12 +644,15 @@ def get_sample_images():
         if category in ('person', 'scene'):
             sample_images = [s for s in sample_images if s.get('category') == category]
 
+        log_operation('获取示例图', f'用户ID: {user_id}, 类别: {category or "全部"}, 数量: {len(sample_images)}')
+        
         return jsonify({
             'success': True,
             'images': sample_images
         })
     except Exception as e:
-        print(f"获取示例图失败: {e}")
+        user_id = session.get('user_id')
+        log_operation('获取示例图失败', f'用户ID: {user_id}, 错误: {str(e)}', 'ERROR')
         return jsonify({
             'success': False,
             'error': str(e),
@@ -766,6 +829,8 @@ def get_records():
         offset = int(request.args.get('offset', 0))
         search = request.args.get('search', '')
         
+        log_request('GET', '/api/records', user_id, f'limit={limit}, offset={offset}, search={search[:20]}' if search else f'limit={limit}, offset={offset}')
+        
         records = database.get_all_records(user_id, limit, offset)
         
         # 如果有搜索条件，过滤结果
@@ -774,13 +839,16 @@ def get_records():
         
         total = database.get_total_count(user_id)
         
+        log_operation('获取记录', f'用户ID: {user_id}, 记录数: {len(records)}/{total}')
+        
         return jsonify({
             'success': True,
             'records': records,
             'total': total
         })
     except Exception as e:
-        print(f"获取记录失败: {e}")
+        user_id = session.get('user_id')
+        log_operation('获取记录失败', f'用户ID: {user_id}, 错误: {str(e)}', 'ERROR')
         return jsonify({
             'success': False,
             'error': str(e),
@@ -793,10 +861,14 @@ def get_records():
 def delete_record(record_id):
     """删除记录"""
     try:
+        user_id = session.get('user_id')
+        log_request('DELETE', f'/api/records/{record_id}', user_id)
         database.delete_record(record_id)
+        log_operation('删除记录', f'用户ID: {user_id}, 记录ID: {record_id}')
         return jsonify({'success': True})
     except Exception as e:
-        print(f"删除记录失败: {e}")
+        user_id = session.get('user_id')
+        log_operation('删除记录失败', f'用户ID: {user_id}, 记录ID: {record_id}, 错误: {str(e)}', 'ERROR')
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/batch-delete', methods=['POST'])
@@ -804,10 +876,13 @@ def delete_record(record_id):
 def batch_delete_records():
     """批量删除记录"""
     try:
+        user_id = session.get('user_id')
         data = request.get_json()
         record_ids = data.get('ids', [])
+        log_request('POST', '/api/batch-delete', user_id, f'记录数: {len(record_ids)}')
         
         if not record_ids:
+            log_operation('批量删除记录', f'用户ID: {user_id}, 未选择记录', 'WARNING')
             return jsonify({'success': False, 'message': '未选择要删除的记录'})
         
         deleted_count = 0
@@ -818,16 +893,18 @@ def batch_delete_records():
                 database.delete_record(record_id)
                 deleted_count += 1
             except Exception as e:
-                print(f"删除记录 {record_id} 失败: {e}")
+                log_operation('删除单条记录失败', f'用户ID: {user_id}, 记录ID: {record_id}, 错误: {str(e)}', 'WARNING')
                 failed_count += 1
         
+        log_operation('批量删除记录', f'用户ID: {user_id}, 成功: {deleted_count}, 失败: {failed_count}')
         return jsonify({
             'success': True,
             'deleted': deleted_count,
             'failed': failed_count
         })
     except Exception as e:
-        print(f"批量删除记录失败: {e}")
+        user_id = session.get('user_id')
+        log_operation('批量删除记录失败', f'用户ID: {user_id}, 错误: {str(e)}', 'ERROR')
         return jsonify({'success': False, 'message': str(e)})
 
 @app.route('/api/upload-sample-image', methods=['POST'])
@@ -836,23 +913,28 @@ def upload_sample_image():
     """上传示例图到 OSS（用户隔离）"""
     try:
         user_id = session.get('user_id')
+        log_request('POST', '/api/upload-sample-image', user_id)
         
         if 'file' not in request.files:
+            log_operation('上传样本图失败', f'用户ID: {user_id}, 错误: 没有上传文件', 'WARNING')
             return jsonify({'success': False, 'error': '没有上传文件'}), 400
         
         file = request.files['file']
         if file.filename == '':
+            log_operation('上传样本图失败', f'用户ID: {user_id}, 错误: 文件名为空', 'WARNING')
             return jsonify({'success': False, 'error': '文件名为空'}), 400
         
         # 验证文件类型
         allowed_extensions = {'jpg', 'jpeg', 'png', 'webp'}
         file_ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else ''
         if file_ext not in allowed_extensions:
+            log_operation('上传样本图失败', f'用户ID: {user_id}, 错误: 不支持的文件格式 {file_ext}', 'WARNING')
             return jsonify({'success': False, 'error': f'不支持的文件格式，仅支持: {", ".join(allowed_extensions)}'}), 400
         
         # 获取 OSS 配置
         bucket, endpoint_full = get_oss_bucket()
         if not bucket:
+            log_operation('上传样本图失败', f'用户ID: {user_id}, 错误: OSS配置不完整', 'ERROR')
             return jsonify({'success': False, 'error': 'OSS 配置不完整'}), 500
         
         # 生成对象键 - 按用户与类别保存到 sample/{category}/user_{user_id}/ 目录
@@ -870,6 +952,8 @@ def upload_sample_image():
         # 生成公网访问 URL
         url = f"https://{endpoint_full}/{object_key}"
         
+        log_operation('上传样本图', f'用户ID: {user_id}, 文件: {filename}, 类别: {category}, 大小: {len(file.read())} bytes')
+        
         return jsonify({
             'success': True,
             'url': url,
@@ -878,7 +962,8 @@ def upload_sample_image():
         })
     
     except Exception as e:
-        print(f"上传示例图失败: {e}")
+        user_id = session.get('user_id')
+        log_operation('上传样本图失败', f'用户ID: {user_id}, 错误: {str(e)}', 'ERROR')
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -891,27 +976,33 @@ def delete_sample_image():
         user_id = session.get('user_id')
         data = request.json
         key = data.get('key')
+        log_request('POST', '/api/delete-sample-image', user_id, f'key: {key}')
         
         if not key:
+            log_operation('删除样本图失败', f'用户ID: {user_id}, 错误: 缺少文件key', 'WARNING')
             return jsonify({'success': False, 'error': '缺少文件 key'}), 400
         
         # 验证 key 是否属于当前用户（支持 person/scene 两类）
         allowed_prefixes = [f'sample/person/user_{user_id}/', f'sample/scene/user_{user_id}/']
         if not any(key.startswith(p) for p in allowed_prefixes):
+            log_operation('删除样本图失败', f'用户ID: {user_id}, 错误: 无权删除此文件 {key}', 'WARNING')
             return jsonify({'success': False, 'error': '无权删除此文件'}), 403
         
         # 获取 OSS 配置
         bucket, endpoint_full = get_oss_bucket()
         if not bucket:
+            log_operation('删除样本图失败', f'用户ID: {user_id}, 错误: OSS配置不完整', 'ERROR')
             return jsonify({'success': False, 'error': 'OSS 配置不完整'}), 500
         
         # 删除文件
         bucket.delete_object(key)
+        log_operation('删除样本图', f'用户ID: {user_id}, 文件: {key.split("/")[-1]}')
         
         return jsonify({'success': True})
     
     except Exception as e:
-        print(f"删除示例图失败: {e}")
+        user_id = session.get('user_id')
+        log_operation('删除样本图失败', f'用户ID: {user_id}, 错误: {str(e)}', 'ERROR')
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -925,8 +1016,10 @@ def delete_library_asset():
         data = request.get_json() or {}
         key = data.get('key')
         user_id = session.get('user_id')
+        log_request('POST', '/api/delete-library-asset', user_id, f'key: {key}')
 
         if not key:
+            log_operation('删除库资源失败', f'用户ID: {user_id}, 错误: 缺少key', 'WARNING')
             return jsonify({'success': False, 'error': '缺少 key'}), 400
 
         if key.startswith('db_person_'):
@@ -939,6 +1032,7 @@ def delete_library_asset():
                 conn_asset = []
 
             database.delete_person_asset(aid)
+            log_operation('删除人物库资源', f'用户ID: {user_id}, 资源ID: {aid}')
             return jsonify({'success': True})
         elif key.startswith('db_scene_'):
             aid = int(key.split('_')[-1])
@@ -947,11 +1041,14 @@ def delete_library_asset():
             except Exception:
                 conn_asset = []
             database.delete_scene_asset(aid)
+            log_operation('删除场景库资源', f'用户ID: {user_id}, 资源ID: {aid}')
             return jsonify({'success': True})
         else:
+            log_operation('删除库资源失败', f'用户ID: {user_id}, 错误: 不支持的key类型 {key}', 'WARNING')
             return jsonify({'success': False, 'error': '不支持的 key 类型'}), 400
     except Exception as e:
-        print(f"删除库条目失败: {e}")
+        user_id = session.get('user_id')
+        log_operation('删除库资源失败', f'用户ID: {user_id}, 错误: {str(e)}', 'ERROR')
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -966,8 +1063,10 @@ def add_to_person_library():
         data = request.get_json() or {}
         url = data.get('url')
         filename = secure_filename(data.get('filename') or os.path.basename(url or ''))
+        log_request('POST', '/api/add-to-person-library', user_id, f'文件: {filename}')
 
         if not url:
+            log_operation('添加人物库资源失败', f'用户ID: {user_id}, 错误: 缺少url', 'WARNING')
             return jsonify({'success': False, 'error': '缺少 url'}), 400
 
         # 尝试将文件上传到 OSS（如果配置了 OSS）
@@ -1006,17 +1105,20 @@ def add_to_person_library():
                         fh.write(resp.content)
                     public_url = '/' + dest_path.replace('\\', '/')
             else:
+                log_operation('添加人物库资源失败', f'用户ID: {user_id}, 错误: 无法下载远程图片', 'WARNING')
                 return jsonify({'success': False, 'error': '无法下载远程图片'}), 400
 
         # 写入数据库记录
         try:
             database.save_person_asset(user_id, filename, public_url, meta={'source_url': url})
+            log_operation('添加人物库资源', f'用户ID: {user_id}, 文件: {filename}')
         except Exception as e:
-            print(f"保存人物库记录失败: {e}")
+            log_operation('保存人物库记录失败', f'用户ID: {user_id}, 错误: {str(e)}', 'WARNING')
 
         return jsonify({'success': True, 'url': public_url, 'filename': filename})
     except Exception as e:
-        print(f"添加到人物库失败: {e}")
+        user_id = session.get('user_id')
+        log_operation('添加人物库资源失败', f'用户ID: {user_id}, 错误: {str(e)}', 'ERROR')
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -1031,8 +1133,10 @@ def add_to_scene_library():
         data = request.get_json() or {}
         url = data.get('url')
         filename = secure_filename(data.get('filename') or os.path.basename(url or ''))
+        log_request('POST', '/api/add-to-scene-library', user_id, f'文件: {filename}')
 
         if not url:
+            log_operation('添加场景库资源失败', f'用户ID: {user_id}, 错误: 缺少url', 'WARNING')
             return jsonify({'success': False, 'error': '缺少 url'}), 400
 
         bucket, endpoint_full = get_oss_bucket()
@@ -1067,16 +1171,19 @@ def add_to_scene_library():
                         fh.write(resp.content)
                     public_url = '/' + dest_path.replace('\\', '/')
             else:
+                log_operation('添加场景库资源失败', f'用户ID: {user_id}, 错误: 无法下载远程图片', 'WARNING')
                 return jsonify({'success': False, 'error': '无法下载远程图片'}), 400
 
         try:
             database.save_scene_asset(user_id, filename, public_url, meta={'source_url': url})
+            log_operation('添加场景库资源', f'用户ID: {user_id}, 文件: {filename}')
         except Exception as e:
-            print(f"保存场景库记录失败: {e}")
+            log_operation('保存场景库记录失败', f'用户ID: {user_id}, 错误: {str(e)}', 'WARNING')
 
         return jsonify({'success': True, 'url': public_url, 'filename': filename})
     except Exception as e:
-        print(f"添加到场景库失败: {e}")
+        user_id = session.get('user_id')
+        log_operation('添加场景库资源失败', f'用户ID: {user_id}, 错误: {str(e)}', 'ERROR')
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -1090,11 +1197,16 @@ def batch_generate_all():
         data = request.json
         tasks = data.get('tasks', [])
         
+        log_request('POST', '/api/batch-generate-all', user_id, f'任务数量: {len(tasks)}')
+        
         if not tasks:
+            log_operation('批量生成失败', f'用户ID: {user_id}, 原因: 没有任务', 'WARNING')
             return jsonify({'success': False, 'error': '没有任务'}), 400
         
         # 生成批次ID
         batch_id = str(uuid.uuid4())
+        
+        log_operation('批量生成启动', f'用户ID: {user_id}, 批次ID: {batch_id}, 任务数: {len(tasks)}')
         
         # 初始化进度
         with batch_progress_lock:
@@ -1298,18 +1410,24 @@ def process_single_batch_task(task, batch_id, user_id):
 def get_batch_progress(batch_id):
     """查询批量任务进度"""
     user_id = session.get('user_id')
+    log_request('GET', f'/api/batch-progress/{batch_id}', user_id)
+    
     with batch_progress_lock:
         if batch_id not in batch_progress:
+            log_operation('查询批量进度失败', f'用户ID: {user_id}, 批次ID: {batch_id}, 错误: 批次不存在', 'WARNING')
             return jsonify({'success': False, 'error': '批次ID不存在'}), 404
         
         # 验证批次属于当前用户
         if batch_progress[batch_id].get('user_id') != user_id:
+            log_operation('查询批量进度失败', f'用户ID: {user_id}, 批次ID: {batch_id}, 错误: 无权访问', 'WARNING')
             return jsonify({'success': False, 'error': '无权访问此批次'}), 403
         
         progress = batch_progress[batch_id].copy()
         # 只返回最近100条日志
         if len(progress['logs']) > 100:
             progress['logs'] = progress['logs'][-100:]
+        
+        log_operation('查询批量进度', f'用户ID: {user_id}, 批次ID: {batch_id}, 进度: {progress.get("completed", 0)}/{progress.get("total", 0)}')
         
         return jsonify({
             'success': True,
@@ -1334,10 +1452,14 @@ def favicon():
 def analyze_script():
     """使用火山引擎大模型分析剧本，拆解人物和分镜场景"""
     try:
+        user_id = session.get('user_id')
         data = request.get_json() or {}
         script = data.get('script', '').strip()
         
+        log_request('POST', '/api/analyze-script', user_id, f'脚本长度: {len(script)}')
+        
         if not script:
+            log_operation('剧本分析失败', f'用户ID: {user_id}, 原因: 缺少脚本', 'WARNING')
             return jsonify({'success': False, 'error': '请输入剧本文本'}), 400
         
         # 获取火山引擎 API Key
@@ -1345,40 +1467,79 @@ def analyze_script():
         base_url = os.environ.get('ARK_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3')
         
         if not api_key:
+            log_operation('剧本分析失败', 'API Key未配置', 'ERROR')
             return jsonify({'success': False, 'error': 'ARK_API_KEY 未配置'}), 500
         
         # 初始化 OpenAI 兼容客户端
         client = OpenAI(api_key=api_key, base_url=base_url)
         
         # 构建分析提示词
-        analysis_prompt = f"""请分析以下剧本文本，并以JSON格式输出结果。
+        analysis_prompt = f"""你是一位知名导演，现需要拍摄一部极具吸引力的短片。用户提供了创意需求描述，请按照以下结构进行全面的创意分析和设计。
 
-剧本文本：
+用户创意需求：
 {script}
 
-请提取以下信息，并以JSON格式返回（不要包含markdown代码块，直接返回JSON）：
+请以JSON格式返回完整的创意设计方案（直接返回JSON，不要包含markdown代码块）：
 {{
-  "characters": [
-    {{
-      "name": "人物名称",
-      "description": "人物设定、性格、背景等描述"
-    }}
-  ],
+  "character": {{
+    "name": "人物姓名",
+    "age": "年龄",
+    "gender": "性别",
+    "appearance": "外貌特征描述",
+    "costume": "服饰风格及细节描述",
+    "personality": "性格特征描述",
+    "charm_points": "独特魅力点"
+  }},
+  "monologue": {{
+    "content": "创作的台词独白（100字左右，简洁直白，符合人物特征）",
+    "character_traits": "台词体现的人物特征说明"
+  }},
   "scenes": [
     {{
-      "location": "场景位置",
-      "description": "场景描述、动作、对话等",
-      "characters": ["出场人物1", "出场人物2"],
-      "setting": "场景视觉设定、布景、灯光等"
+      "scene_number": 1,
+      "location": "场景位置描述",
+      "monologue_content": "该场景对应的台词内容",
+      "shot_type": "拍摄景别（全景、中景、近景、特写等）",
+      "character_shot": "人物景别",
+      "angle": "视角描述",
+      "composition": "构图方式",
+      "core_subject": "核心主体",
+      "emotion_action": "情绪和动作描述",
+      "environment": "环境场景细节",
+      "art_style": "艺术风格",
+      "lighting_mood": "氛围光线描述",
+      "color_tone": "色调描述",
+      "camera_movement": "运镜语言（推、拉、摇、移、跟等及其效果）",
+      "sound_effect": "音效设计（环境音、背景音乐等）",
+      "prompt_for_ai": "完整的AI绘图提示词（详细中文描述，让AI能准确捕捉画面细节）"
     }}
-  ]
+  ],
+  "style_tone": {{
+    "reference_keywords": ["参考风格关键词1", "参考风格关键词2", "参考风格关键词3"],
+    "texture_description": "画面质感详细描述",
+    "color_atmosphere": "色调氛围详细描述",
+    "overall_description": "整体风格深入描述"
+  }},
+  "background_music": {{
+    "recommendation": "推荐的背景音乐名称或风格",
+    "reason": "选择理由及其如何烘托视频氛围的说明"
+  }}
 }}
 
-要求：
-1. 仔细识别所有人物及其设定
-2. 按照剧本顺序拆解分镜场景
-3. 为每个场景提供清晰的视觉描述，便于AI图片生成
-4. 返回有效的JSON格式"""
+创意设计要求：
+一、主角设定：全方位精细塑造主角IP形象，包括姓名、年龄、性别、外貌特征、服饰风格及细节，打造独特且极具魅力的角色。
+
+二、台词独白：创作全新台词独白，要有张力，简洁直白，符合人物特征，字数控制在100字左右。
+
+三、分镜场景：依据创作的台词独白智能设计分镜场景，确保台词独白的每个字都能在分镜场景中得到展示。每个场景必需生成一套完整的提示词。
+  1. 场景台词：明确每个场景对应的台词
+  2. 提示词结构：包含拍摄景别、人物景别、视角、构图、核心主体、情绪动作、环境场景、艺术风格、氛围光线、色调等，描述要细致到能让AI绘图准确捕捉画面细节。
+  3. 运镜语言：具体说明推、拉、摇、移、跟等运镜方式在每个场景中的运用时机和预期效果。
+  4. 音效：包括环境音、背景音乐的淡入淡出等音效设计。
+
+四、风格色调：突出用户描述的独特风格，从参考风格关键词、画面质感、色调氛围等方面，用中文详细深入描述。
+
+五、背景音乐：推荐与视频风格高度适配的背景音乐，并阐述选择理由，以更好地烘托视频氛围。"""
         
         # 调用火山引擎大模型
         response = client.chat.completions.create(
@@ -1402,41 +1563,154 @@ def analyze_script():
             try:
                 # 移除可能的 markdown 代码块包装
                 if content.startswith('```'):
-                    content = content.split('```')[1]
-                    if content.startswith('json'):
-                        content = content[4:]
-                    content = content.strip()
-                if content.endswith('```'):
-                    content = content[:-3].strip()
+                    # 处理 ```json ... ``` 的情况
+                    parts = content.split('```')
+                    if len(parts) >= 2:
+                        content = parts[1]
+                        if content.startswith('json'):
+                            content = content[4:]
+                        content = content.strip()
                 
                 result = json.loads(content)
                 
-                # 验证结构
-                if 'characters' not in result:
-                    result['characters'] = []
-                if 'scenes' not in result:
-                    result['scenes'] = []
+                # 验证和规范化新结构
+                # 验证 character 字段
+                if 'character' not in result or not isinstance(result['character'], dict):
+                    result['character'] = {
+                        'name': '主角',
+                        'age': '未知',
+                        'gender': '未知',
+                        'appearance': '',
+                        'costume': '',
+                        'personality': '',
+                        'charm_points': ''
+                    }
+                else:
+                    char = result['character']
+                    # 确保所有字段都存在
+                    defaults = {
+                        'name': '主角',
+                        'age': '未知',
+                        'gender': '未知',
+                        'appearance': '',
+                        'costume': '',
+                        'personality': '',
+                        'charm_points': ''
+                    }
+                    for key, default in defaults.items():
+                        if key not in char:
+                            char[key] = default
+                        char[key] = str(char.get(key, default))
                 
+                # 验证 monologue 字段
+                if 'monologue' not in result or not isinstance(result['monologue'], dict):
+                    result['monologue'] = {
+                        'content': '',
+                        'character_traits': ''
+                    }
+                else:
+                    mono = result['monologue']
+                    if 'content' not in mono:
+                        mono['content'] = ''
+                    if 'character_traits' not in mono:
+                        mono['character_traits'] = ''
+                    mono['content'] = str(mono.get('content', ''))
+                    mono['character_traits'] = str(mono.get('character_traits', ''))
+                
+                # 验证 scenes 字段
+                if 'scenes' not in result or not isinstance(result['scenes'], list):
+                    result['scenes'] = []
+                else:
+                    for scene in result['scenes']:
+                        if not isinstance(scene, dict):
+                            continue
+                        # 确保场景有所有必要字段
+                        scene_defaults = {
+                            'scene_number': 1,
+                            'location': '未知场景',
+                            'monologue_content': '',
+                            'shot_type': '',
+                            'character_shot': '',
+                            'angle': '',
+                            'composition': '',
+                            'core_subject': '',
+                            'emotion_action': '',
+                            'environment': '',
+                            'art_style': '',
+                            'lighting_mood': '',
+                            'color_tone': '',
+                            'camera_movement': '',
+                            'sound_effect': '',
+                            'prompt_for_ai': ''
+                        }
+                        for key, default in scene_defaults.items():
+                            if key not in scene:
+                                scene[key] = default
+                            scene[key] = str(scene.get(key, default))
+                
+                # 验证 style_tone 字段
+                if 'style_tone' not in result or not isinstance(result['style_tone'], dict):
+                    result['style_tone'] = {
+                        'reference_keywords': [],
+                        'texture_description': '',
+                        'color_atmosphere': '',
+                        'overall_description': ''
+                    }
+                else:
+                    style = result['style_tone']
+                    if 'reference_keywords' not in style:
+                        style['reference_keywords'] = []
+                    if 'texture_description' not in style:
+                        style['texture_description'] = ''
+                    if 'color_atmosphere' not in style:
+                        style['color_atmosphere'] = ''
+                    if 'overall_description' not in style:
+                        style['overall_description'] = ''
+                    
+                    # 确保 reference_keywords 是列表
+                    if not isinstance(style['reference_keywords'], list):
+                        keywords = style.get('reference_keywords', '')
+                        if isinstance(keywords, str):
+                            style['reference_keywords'] = [k.strip() for k in keywords.split('、') if k.strip()]
+                        else:
+                            style['reference_keywords'] = []
+                
+                # 验证 background_music 字段
+                if 'background_music' not in result or not isinstance(result['background_music'], dict):
+                    result['background_music'] = {
+                        'recommendation': '',
+                        'reason': ''
+                    }
+                else:
+                    music = result['background_music']
+                    if 'recommendation' not in music:
+                        music['recommendation'] = ''
+                    if 'reason' not in music:
+                        music['reason'] = ''
+                    music['recommendation'] = str(music.get('recommendation', ''))
+                    music['reason'] = str(music.get('reason', ''))
+                
+                log_operation('剧本分析成功', f'用户ID: {user_id}, 拆解场景数: {len(result.get("scenes", []))}')
                 return jsonify({
                     'success': True,
                     'result': result
                 })
             except json.JSONDecodeError as e:
-                print(f"JSON 解析失败: {e}")
-                print(f"返回内容: {content}")
-                # 返回原始内容作为错误提示
+                log_operation('剧本分析失败', f'用户ID: {user_id}, JSON解析错误: {str(e)}', 'ERROR')
                 return jsonify({
                     'success': False,
-                    'error': f'模型返回格式错误: {str(e)}'
+                    'error': f'模型返回格式错误，请重试'
                 }), 500
         else:
+            log_operation('剧本分析失败', f'用户ID: {user_id}, 模型未返回内容', 'ERROR')
             return jsonify({
                 'success': False,
                 'error': '模型未返回内容'
             }), 500
     
     except Exception as e:
-        print(f"剧本分析失败: {e}")
+        user_id = session.get('user_id')
+        log_operation('剧本分析异常', f'用户ID: {user_id}, 错误: {str(e)}', 'ERROR')
         import traceback
         traceback.print_exc()
         return jsonify({
@@ -1445,6 +1719,28 @@ def analyze_script():
         }), 500
 
 if __name__ == '__main__':
+    # 应用启动日志
+    log_operation('应用启动', f'版本: 1.0 | 环境: {"开发" if os.environ.get("DEBUG") else "生产"} | 监听地址: 0.0.0.0:5000')
+    
+    # 记录数据库和存储配置
+    try:
+        db_info = database.get_database_info() if hasattr(database, 'get_database_info') else '已初始化'
+        log_operation('数据库初始化', f'状态: {db_info}')
+    except Exception as e:
+        log_operation('数据库初始化失败', f'错误: {str(e)}', 'WARNING')
+    
+    # 检查 OSS 配置
+    oss_endpoint = os.environ.get('OSS_ENDPOINT')
+    if oss_endpoint:
+        log_operation('OSS配置', f'端点: {oss_endpoint}')
+    else:
+        log_operation('OSS配置未设置', '将使用本地文件存储', 'WARNING')
+    
+    # 检查上传文件夹
+    if not os.path.exists('uploads'):
+        os.makedirs('uploads')
+        log_operation('创建上传目录', 'uploads/')
+    
     print("启动 Web 应用...")
     print(f"访问地址: http://localhost:5000")
     app.run(debug=True, host='0.0.0.0', port=5000)
