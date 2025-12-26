@@ -582,9 +582,12 @@
         let selectedSampleImages = [];
         let sampleImages = [];
         
-        // 保存表单数据到localStorage
+        // 保存表单数据到localStorage（按用户隔离）
         function saveFormData() {
             try {
+                const currentUsername = getCurrentUsername();
+                if (!currentUsername) return; // 如果没有用户名，不保存
+                
                 const formData = {
                     prompt: document.getElementById('prompt').value,
                     negative_prompt: document.getElementById('negative_prompt').value,
@@ -593,7 +596,8 @@
                     num_images: document.getElementById('num_images').value,
                     steps: document.getElementById('steps').value,
                     seed: document.getElementById('seed').value,
-                    output_filename: document.getElementById('output_filename').value
+                    output_filename: document.getElementById('output_filename').value,
+                    username: currentUsername // 保存用户名用于验证
                 };
                 localStorage.setItem('indexFormData', JSON.stringify(formData));
             } catch (e) {
@@ -601,12 +605,22 @@
             }
         }
         
-        // 恢复表单数据
+        // 恢复表单数据（检查用户匹配）
         function loadFormData() {
             try {
+                const currentUsername = getCurrentUsername();
                 const saved = localStorage.getItem('indexFormData');
                 if (saved) {
                     const formData = JSON.parse(saved);
+                    
+                    // 检查用户是否匹配
+                    if (formData.username && formData.username !== currentUsername) {
+                        console.log('检测到不同用户的表单数据，清除旧数据');
+                        localStorage.removeItem('indexFormData');
+                        return; // 不恢复其他用户的数据
+                    }
+                    
+                    // 恢复表单数据
                     document.getElementById('prompt').value = formData.prompt || '';
                     document.getElementById('negative_prompt').value = formData.negative_prompt || '';
                     document.getElementById('aspect_ratio').value = formData.aspect_ratio || '1:1';
@@ -672,29 +686,475 @@
         // 保持连接活跃，防止页面切换时中断请求
         let keepAliveController = null;
         let currentGenerationState = null;
+        let currentTaskId = null;
+        let statusPollingInterval = null;
         
-        // 页面加载时恢复生成状态
-        window.addEventListener('load', function() {
+        // 轮询任务状态
+        function startStatusPolling(taskId) {
+            console.log('%c🚀 开始轮询任务状态', 'color: blue; font-size: 14px; font-weight: bold;');
+            console.log('任务ID:', taskId);
+            updateDebugInfo('🔄 开始轮询任务状态', taskId);
+            
+            if (statusPollingInterval) {
+                clearInterval(statusPollingInterval);
+            }
+            
+            statusPollingInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/single-generation-status/${taskId}`);
+                    const data = await response.json();
+                    
+                    // 添加详细的调试日志
+                    const logTime = new Date().toLocaleTimeString();
+                    if (data.success && data.task) {
+                        const task = data.task;
+                        console.log(`%c[轮询 ${logTime}] 任务 ${taskId}`, 'color: blue; font-weight: bold;');
+                        console.log(`  状态: ${task.status}`);
+                        console.log(`  开始时间: ${task.start_time}`);
+                        console.log(`  结束时间: ${task.end_time || '未完成'}`);
+                        console.log(`  结果:`, task.result || '无');
+                    } else {
+                        console.error(`%c[轮询 ${logTime}] 任务 ${taskId} 查询失败`, 'color: red; font-weight: bold;');
+                        console.error(`  错误:`, data.error || '未知错误');
+                        console.error(`  完整响应:`, data);
+                    }
+                    
+                    if (data.success && data.task) {
+                        const task = data.task;
+                        
+                        // 更新本地状态（包含用户名）
+                        const currentUsername = getCurrentUsername();
+                        currentGenerationState = {
+                            status: task.status,
+                            startTime: new Date(task.start_time).getTime(),
+                            taskId: taskId,
+                            username: currentUsername  // 保存用户名用于验证
+                        };
+                        // 每次轮询都保存状态
+                        localStorage.setItem('singleGenerationState', JSON.stringify(currentGenerationState));
+                        
+                        if (task.status === 'completed') {
+                            // 任务完成，停止轮询
+                            clearInterval(statusPollingInterval);
+                            statusPollingInterval = null;
+                            
+                            console.log('%c✅ 任务完成！', 'color: green; font-size: 16px; font-weight: bold;');
+                            console.log('任务ID:', taskId);
+                            console.log('完成时间:', task.end_time || new Date().toISOString());
+                            console.log('结果:', task.result);
+                            
+                            // 更新调试信息
+                            updateDebugInfo('✅ 任务已完成', taskId);
+                            
+                            // 如果结果区域是空的，提示用户查看生成记录
+                            const resultImages = document.getElementById('resultImages');
+                            if (!resultImages.hasChildNodes()) {
+                                resultImages.innerHTML = `
+                                    <div style="text-align: center; padding: 40px;">
+                                        <h3>✅ 生成完成！</h3>
+                                        <p>任务已完成，请前往 <a href="/records">生成记录</a> 查看结果</p>
+                                        <p>任务ID: ${taskId}</p>
+                                    </div>
+                                `;
+                            }
+                            
+                            const loading = document.getElementById('loading');
+                            if (loading) {
+                                loading.classList.remove('active');
+                            }
+                            const generateBtn = document.getElementById('generateBtn');
+                            if (generateBtn) {
+                                generateBtn.disabled = false;
+                                generateBtn.textContent = '🚀 开始生成';
+                            }
+                        } else if (task.status === 'failed') {
+                            // 任务失败，停止轮询
+                            clearInterval(statusPollingInterval);
+                            statusPollingInterval = null;
+                            
+                            const errorMessage = document.getElementById('errorMessage');
+                            errorMessage.textContent = task.error || '生成失败';
+                            errorMessage.classList.add('active');
+                            
+                            const loading = document.getElementById('loading');
+                            loading.classList.remove('active');
+                            document.getElementById('generateBtn').disabled = false;
+                            document.getElementById('generateBtn').textContent = '🚀 开始生成';
+                        } else if (task.status === 'generating') {
+                            // 任务进行中，更新进度显示
+                            const progress = task.progress || 0;
+                            const total = task.total || 1;
+                            const loading = document.getElementById('loading');
+                            if (!loading.classList.contains('active')) {
+                                loading.classList.add('active');
+                            }
+                            document.getElementById('generateBtn').disabled = true;
+                            document.getElementById('generateBtn').textContent = `生成中... (${progress}/${total})`;
+                            
+                            // 如果任务进行中超过2分钟，主动检查数据库记录
+                            const startTime = new Date(task.start_time).getTime();
+                            const elapsed = Date.now() - startTime;
+                            if (elapsed > 2 * 60 * 1000) {  // 2分钟
+                                console.log('任务进行中超过2分钟，主动检查数据库记录...');
+                                // 检查最近的生成记录
+                                fetch('/api/records?limit=5')
+                                    .then(res => res.json())
+                                    .then(recordsData => {
+                                        if (recordsData.success && recordsData.records && recordsData.records.length > 0) {
+                                            const latestRecord = recordsData.records[0];
+                                            const recordTime = new Date(latestRecord.created_at).getTime();
+                                            const timeDiff = recordTime - startTime;
+                                            
+                                            // 如果记录在任务开始后2分钟内，认为任务已完成
+                                            if (timeDiff >= 0 && timeDiff < 2 * 60 * 1000) {
+                                                console.log('检测到任务已完成，更新状态');
+                                                // 停止轮询
+                                                clearInterval(statusPollingInterval);
+                                                statusPollingInterval = null;
+                                                
+                                                // 更新状态
+                                                const currentUsername = getCurrentUsername();
+                                                currentGenerationState = {
+                                                    status: 'completed',
+                                                    startTime: startTime,
+                                                    taskId: taskId,
+                                                    username: currentUsername,
+                                                    result: { images_count: 1 }
+                                                };
+                                                localStorage.setItem('singleGenerationState', JSON.stringify(currentGenerationState));
+                                                
+                                                // 更新UI
+                                                const resultImages = document.getElementById('resultImages');
+                                                if (resultImages && !resultImages.hasChildNodes()) {
+                                                    resultImages.innerHTML = `
+                                                        <div style="text-align: center; padding: 40px;">
+                                                            <h3>✅ 生成完成！</h3>
+                                                            <p>任务已完成，请前往 <a href="/records">生成记录</a> 查看结果</p>
+                                                            <p>任务ID: ${taskId}</p>
+                                                        </div>
+                                                    `;
+                                                }
+                                                
+                                                if (loading) {
+                                                    loading.classList.remove('active');
+                                                }
+                                                const generateBtn = document.getElementById('generateBtn');
+                                                if (generateBtn) {
+                                                    generateBtn.disabled = false;
+                                                    generateBtn.textContent = '🚀 开始生成';
+                                                }
+                                            }
+                                        }
+                                    })
+                                    .catch(err => {
+                                        console.error('检查生成记录失败:', err);
+                                    });
+                            }
+                        }
+                    } else {
+                        // 任务不存在，可能是已完成但不在内存中
+                        // 检查生成记录中是否有最近生成的图片（5分钟内）
+                        const elapsed = Date.now() - (currentGenerationState?.startTime || Date.now());
+                        if (elapsed < 5 * 60 * 1000) {  // 5分钟内
+                            // 尝试查询最近的生成记录
+                            fetch('/api/records?limit=1')
+                                .then(res => res.json())
+                                .then(recordsData => {
+                                    if (recordsData.success && recordsData.records && recordsData.records.length > 0) {
+                                        const latestRecord = recordsData.records[0];
+                                        const recordTime = new Date(latestRecord.created_at).getTime();
+                                        const timeDiff = Date.now() - recordTime;
+                                        
+                                        // 如果记录在5分钟内，认为任务已完成
+                                        if (timeDiff < 5 * 60 * 1000) {
+                                            console.log('检测到最近有生成记录，任务可能已完成');
+                                            // 更新状态为完成（包含用户名）
+                                            const currentUsername = getCurrentUsername();
+                                            currentGenerationState = {
+                                                status: 'completed',
+                                                startTime: currentGenerationState?.startTime || recordTime,
+                                                taskId: taskId,
+                                                username: currentUsername
+                                            };
+                                            localStorage.setItem('singleGenerationState', JSON.stringify(currentGenerationState));
+                                            
+                                            // 停止轮询
+                                            clearInterval(statusPollingInterval);
+                                            statusPollingInterval = null;
+                                            
+                                            // 显示完成提示
+                                            const resultImages = document.getElementById('resultImages');
+                                            if (resultImages && !resultImages.hasChildNodes()) {
+                                                resultImages.innerHTML = `
+                                                    <div style="text-align: center; padding: 40px;">
+                                                        <h3>✅ 生成完成！</h3>
+                                                        <p>任务已在后台完成，请前往 <a href="/records">生成记录</a> 查看结果</p>
+                                                        <p>任务ID: ${taskId}</p>
+                                                    </div>
+                                                `;
+                                            }
+                                            
+                                            const loading = document.getElementById('loading');
+                                            if (loading) {
+                                                loading.classList.remove('active');
+                                            }
+                                            const generateBtn = document.getElementById('generateBtn');
+                                            if (generateBtn) {
+                                                generateBtn.disabled = false;
+                                                generateBtn.textContent = '🚀 开始生成';
+                                            }
+                                        } else {
+                                            // 记录太旧，任务可能真的不存在
+                                            console.log('任务不存在且没有最近的生成记录');
+                                            clearInterval(statusPollingInterval);
+                                            statusPollingInterval = null;
+                                        }
+                                    } else {
+                                        // 没有记录，任务可能真的不存在
+                                        console.log('任务不存在且没有生成记录');
+                                        clearInterval(statusPollingInterval);
+                                        statusPollingInterval = null;
+                                    }
+                                })
+                                .catch(err => {
+                                    console.error('查询生成记录失败:', err);
+                                    // 如果查询失败，继续轮询一段时间
+                                });
+                        } else {
+                            // 任务时间太久，停止轮询
+                            console.log('任务不存在且时间过久，停止轮询');
+                            clearInterval(statusPollingInterval);
+                            statusPollingInterval = null;
+                        }
+                    }
+                } catch (error) {
+                    console.error('查询任务状态失败:', error);
+                }
+            }, 1000); // 每1秒查询一次（加快检测速度）
+        }
+        
+        // 获取当前用户名（从页面中获取）
+        function getCurrentUsername() {
+            const usernameElement = document.querySelector('.username');
+            return usernameElement ? usernameElement.textContent.trim() : null;
+        }
+        
+        // 更新调试信息显示
+        function updateDebugInfo(message, taskId) {
+            const debugInfo = document.getElementById('debugInfo');
+            const debugContent = document.getElementById('debugContent');
+            if (debugInfo && debugContent) {
+                debugInfo.style.display = 'block';
+                const time = new Date().toLocaleTimeString();
+                debugContent.innerHTML = `
+                    <div>${time}</div>
+                    <div>${message}</div>
+                    <div>任务ID: ${taskId || '无'}</div>
+                `;
+                // 3秒后自动隐藏
+                setTimeout(() => {
+                    if (debugInfo) {
+                        debugInfo.style.display = 'none';
+                    }
+                }, 3000);
+            }
+        }
+        
+        // 恢复任务状态的函数
+        function restoreGenerationState() {
             const savedState = localStorage.getItem('singleGenerationState');
             if (savedState) {
                 try {
                     const state = JSON.parse(savedState);
+                    const currentUsername = getCurrentUsername();
+                    
+                    // 检查用户是否匹配
+                    if (state.username && state.username !== currentUsername) {
+                        console.log('检测到不同用户的任务状态，清除旧状态');
+                        localStorage.removeItem('singleGenerationState');
+                        return false;
+                    }
+                    
                     const elapsed = Date.now() - state.startTime;
                     
                     // 如果是进行中的任务（30分钟内）
-                    if (state.status === 'generating' && elapsed < 30 * 60 * 1000) {
+                    if ((state.status === 'generating' || state.pending) && elapsed < 30 * 60 * 1000) {
+                        // 如果有任务ID，直接恢复轮询
+                        if (state.taskId) {
+                            currentTaskId = state.taskId;
                         const loading = document.getElementById('loading');
+                            if (loading) {
                         loading.classList.add('active');
-                        document.getElementById('generateBtn').disabled = true;
-                        document.getElementById('generateBtn').textContent = '生成中...';
+                            }
+                            const generateBtn = document.getElementById('generateBtn');
+                            if (generateBtn) {
+                                generateBtn.disabled = true;
+                                generateBtn.textContent = '生成中...';
+                            }
+                            
+                            // 开始轮询任务状态
+                            startStatusPolling(state.taskId);
+                            console.log('已恢复单图生成任务:', state.taskId);
+                            return true;
+                        } 
+                        // 如果没有任务ID但是有pending标记，说明请求可能还在进行中
+                        else if (state.pending) {
+                            const loading = document.getElementById('loading');
+                            if (loading) {
+                                loading.classList.add('active');
+                            }
+                            const generateBtn = document.getElementById('generateBtn');
+                            if (generateBtn) {
+                                generateBtn.disabled = true;
+                                generateBtn.textContent = '生成中...';
+                            }
+                            
+                            // 尝试轮询检查任务状态（通过检查最近的任务）
+                            console.log('⚠️ 检测到待处理任务，等待任务ID...');
+                            updateDebugInfo('⏳ 等待任务ID...', null);
+                            
+                            // 每2秒检查一次，最多检查30次（1分钟）
+                            let checkCount = 0;
+                            const checkInterval = setInterval(() => {
+                                checkCount++;
+                                const currentState = localStorage.getItem('singleGenerationState');
+                                if (currentState) {
+                                    try {
+                                        const current = JSON.parse(currentState);
+                                        if (current.taskId) {
+                                            clearInterval(checkInterval);
+                                            currentTaskId = current.taskId;
+                                            console.log('✅ 检测到任务ID，开始轮询:', current.taskId);
+                                            updateDebugInfo('✅ 检测到任务ID', current.taskId);
+                                            startStatusPolling(current.taskId);
+                                            return;
+                                        }
+                                        // 如果状态不再是pending，说明可能已完成或失败
+                                        if (!current.pending && current.status !== 'generating') {
+                                            clearInterval(checkInterval);
+                                            console.log('任务状态已更新，不再是pending:', current.status);
+                                            if (current.status === 'completed') {
+                                                updateDebugInfo('✅ 任务已完成', current.taskId);
+                                            } else if (current.status === 'failed') {
+                                                updateDebugInfo('❌ 任务失败', current.taskId);
+                                            }
+                                            return;
+                                        }
+                                    } catch (e) {
+                                        console.error('解析状态失败:', e);
+                                    }
+                                }
+                                if (checkCount >= 30) {
+                                    clearInterval(checkInterval);
+                                    console.log('❌ 等待任务ID超时（1分钟）');
+                                    updateDebugInfo('❌ 等待超时', null);
+                                    // 清除pending状态，允许用户重新生成
+                                    if (loading) {
+                                        loading.classList.remove('active');
+                                    }
+                                    if (generateBtn) {
+                                        generateBtn.disabled = false;
+                                        generateBtn.textContent = '🚀 开始生成';
+                                    }
+                                }
+                            }, 2000); // 改为2秒检查一次
+                            return true;
+                        }
                     }
                     // 如果是已完成的任务，恢复显示结果
                     else if (state.status === 'completed' && state.result) {
+                        const resultImages = document.getElementById('resultImages');
+                        if (resultImages && !resultImages.hasChildNodes()) {
                         displayResults(state.result);
+                        }
+                        return true;
                     }
                 } catch (e) {
                     console.error('恢复生成状态失败:', e);
                 }
+            }
+            return false;
+        }
+        
+        // 页面加载时，先检查并清除不匹配用户的任务状态和表单数据
+        window.addEventListener('load', function() {
+            const currentUsername = getCurrentUsername();
+            
+            // 检查并清除不匹配用户的任务状态
+            const savedState = localStorage.getItem('singleGenerationState');
+            if (savedState) {
+                try {
+                    const state = JSON.parse(savedState);
+                    if (state.username && state.username !== currentUsername) {
+                        console.log('检测到不同用户的任务状态，清除旧状态');
+                        localStorage.removeItem('singleGenerationState');
+                    } else if (state.pending && !state.username) {
+                        // 如果状态是pending但没有用户名，可能是旧数据，清除它
+                        console.log('检测到旧的pending状态（无用户名），清除它');
+                        localStorage.removeItem('singleGenerationState');
+                    }
+                } catch (e) {
+                    console.error('解析保存的状态失败:', e);
+                    localStorage.removeItem('singleGenerationState');
+                }
+            }
+            
+            // 检查并清除不匹配用户的表单数据
+            const savedFormData = localStorage.getItem('indexFormData');
+            if (savedFormData) {
+                try {
+                    const formData = JSON.parse(savedFormData);
+                    if (formData.username && formData.username !== currentUsername) {
+                        console.log('检测到不同用户的表单数据，清除旧数据');
+                        localStorage.removeItem('indexFormData');
+                    }
+                } catch (e) {
+                    console.error('解析表单数据失败:', e);
+                    localStorage.removeItem('indexFormData');
+                }
+            }
+            
+            // 恢复表单数据（在恢复任务状态之前）
+            loadFormData();
+            
+            // 然后恢复任务状态
+            restoreGenerationState();
+        });
+        
+        // 使用 pageshow 事件确保从缓存恢复时也能恢复状态
+        window.addEventListener('pageshow', function(event) {
+            // event.persisted 为 true 表示页面是从缓存中恢复的
+            if (event.persisted) {
+                console.log('页面从缓存恢复，检查任务状态...');
+                restoreGenerationState();
+            }
+        });
+        
+        // 页面卸载前保存状态
+        window.addEventListener('beforeunload', function() {
+            if (currentGenerationState) {
+                // 保存当前状态，包括任务ID
+                if (currentTaskId) {
+                    currentGenerationState.taskId = currentTaskId;
+                }
+                localStorage.setItem('singleGenerationState', JSON.stringify(currentGenerationState));
+            }
+        });
+        
+        // 监听所有导航事件，在切换前保存状态
+        document.addEventListener('click', function(e) {
+            // 检查是否是导航链接
+            const link = e.target.closest('a');
+            if (link && link.href && !link.href.startsWith('javascript:') && !link.href.startsWith('#')) {
+                // 延迟一下，确保状态已更新
+                setTimeout(() => {
+                    if (currentGenerationState) {
+                        if (currentTaskId) {
+                            currentGenerationState.taskId = currentTaskId;
+                        }
+                        localStorage.setItem('singleGenerationState', JSON.stringify(currentGenerationState));
+                    }
+                }, 100);
             }
         });
         
@@ -713,10 +1173,12 @@
             generateBtn.disabled = true;
             generateBtn.textContent = '生成中...';
             
-            // 保存生成状态为进行中
+            // 保存生成状态为进行中（包含用户名）
+            const currentUsername = getCurrentUsername();
             currentGenerationState = {
                 status: 'generating',
-                startTime: Date.now()
+                startTime: Date.now(),
+                username: currentUsername  // 保存用户名用于验证
             };
             localStorage.setItem('singleGenerationState', JSON.stringify(currentGenerationState));
             
@@ -733,6 +1195,11 @@
             });
             
             try {
+                // 在发送请求前，先保存一个待处理状态，并立即保存到 localStorage
+                currentGenerationState.status = 'generating';
+                currentGenerationState.pending = true; // 标记为待处理
+                localStorage.setItem('singleGenerationState', JSON.stringify(currentGenerationState));
+                
                 // 使用 keepalive 选项，确保即使页面关闭请求也会完成
                 const response = await fetch('/generate', {
                     method: 'POST',
@@ -745,37 +1212,83 @@
                 if (data.error) {
                     errorMessage.textContent = data.error;
                     errorMessage.classList.add('active');
-                    // 更新状态为失败
+                    // 更新状态为失败（包含用户名）
+                    const currentUsername = getCurrentUsername();
                     currentGenerationState = {
                         status: 'failed',
                         error: data.error,
-                        startTime: currentGenerationState.startTime
+                        startTime: currentGenerationState.startTime,
+                        taskId: data.task_id || currentTaskId,
+                        username: currentUsername
                     };
+                    delete currentGenerationState.pending;
                     localStorage.setItem('singleGenerationState', JSON.stringify(currentGenerationState));
                 } else if (data.success) {
+                    // 无论是否有图片，都先保存task_id（关键修复）
+                    if (data.task_id) {
+                        currentTaskId = data.task_id;
+                        console.log('✅ 收到任务ID:', data.task_id);
+                    }
+                    
+                    // 如果响应成功且包含图片，说明任务已完成（同步返回结果）
+                    if (data.images && data.images.length > 0) {
+                        // 停止轮询（如果正在轮询）
+                        if (statusPollingInterval) {
+                            clearInterval(statusPollingInterval);
+                            statusPollingInterval = null;
+                        }
+                        
+                        // 显示结果
                     displayResults(data);
-                    // 保存完成状态和结果
+                        
+                        // 保存完成状态和结果（包含用户名和task_id）
+                        const currentUsername = getCurrentUsername();
                     currentGenerationState = {
                         status: 'completed',
                         result: data,
-                        startTime: currentGenerationState.startTime
+                            startTime: currentGenerationState.startTime,
+                            taskId: data.task_id || currentTaskId,
+                            username: currentUsername
                     };
+                        delete currentGenerationState.pending; // 清除pending标记
                     localStorage.setItem('singleGenerationState', JSON.stringify(currentGenerationState));
                     
-                    // 提示用户可以在生成记录中查看
-                    if (data.images && data.images.length > 0) {
-                        console.log('图片生成成功，可在生成记录页面查看');
+                        // 立即更新UI，确保用户可以继续操作
+                        loading.classList.remove('active');
+                        generateBtn.disabled = false;
+                        generateBtn.textContent = '🚀 开始生成';
+                        
+                        console.log('✅ 图片生成成功，任务已完成，任务ID:', data.task_id || currentTaskId);
+                    } else if (data.task_id) {
+                        // 如果返回了task_id但没有图片，说明是异步任务，开始轮询
+                        currentGenerationState.taskId = data.task_id;
+                        currentGenerationState.status = 'generating';
+                        delete currentGenerationState.pending;
+                        // 立即保存到 localStorage
+                        localStorage.setItem('singleGenerationState', JSON.stringify(currentGenerationState));
+                        // 立即开始轮询（每1秒查询一次，加快检测速度）
+                        startStatusPolling(data.task_id);
+                        console.log('🔄 异步任务，开始轮询，任务ID:', data.task_id);
+                    } else {
+                        // 如果没有task_id也没有images，可能是异常情况
+                        console.warn('⚠️ 响应成功但没有task_id和images:', data);
+                        delete currentGenerationState.pending;
+                        localStorage.setItem('singleGenerationState', JSON.stringify(currentGenerationState));
                     }
                 }
             } catch (error) {
                 errorMessage.textContent = '生成失败: ' + error.message;
                 errorMessage.classList.add('active');
-                // 更新状态为失败
+                // 更新状态为失败（包含用户名）
+                const currentUsername = getCurrentUsername();
                 currentGenerationState = {
                     status: 'failed',
                     error: error.message,
-                    startTime: currentGenerationState ? currentGenerationState.startTime : Date.now()
+                    startTime: currentGenerationState ? currentGenerationState.startTime : Date.now(),
+                    taskId: currentTaskId,
+                    username: currentUsername
                 };
+                delete currentGenerationState.pending;
                 localStorage.setItem('singleGenerationState', JSON.stringify(currentGenerationState));
             } finally {
                 loading.classList.remove('active');
@@ -788,28 +1301,36 @@
         document.addEventListener('visibilitychange', function() {
             if (document.hidden) {
                 const loading = document.getElementById('loading');
-                if (loading.classList.contains('active')) {
+                if (loading && loading.classList.contains('active')) {
                     console.log('页面已切换，但生成任务将继续在后台执行');
+                    // 保存当前状态（确保任务ID已保存）
+                    if (currentGenerationState) {
+                        if (currentTaskId) {
+                            currentGenerationState.taskId = currentTaskId;
+                        }
+                        localStorage.setItem('singleGenerationState', JSON.stringify(currentGenerationState));
+                    }
                 }
             } else {
                 // 页面返回时，检查并恢复状态
-                const savedState = localStorage.getItem('singleGenerationState');
-                if (savedState) {
-                    try {
-                        const state = JSON.parse(savedState);
-                        if (state.status === 'completed' && state.result) {
-                            // 如果结果区域是空的，重新显示结果
-                            const resultImages = document.getElementById('resultImages');
-                            if (!resultImages.hasChildNodes()) {
-                                displayResults(state.result);
-                            }
-                        }
-                    } catch (e) {
-                        console.error('恢复状态失败:', e);
-                    }
-                }
+                console.log('页面可见，检查任务状态...');
+                restoreGenerationState();
             }
         });
+        
+        // 定期保存状态（每5秒），防止状态丢失
+        setInterval(function() {
+            if (currentGenerationState && (currentGenerationState.status === 'generating' || currentGenerationState.pending)) {
+                const currentUsername = getCurrentUsername();
+                if (currentUsername) {
+                    currentGenerationState.username = currentUsername;  // 确保用户名是最新的
+                }
+                if (currentTaskId) {
+                    currentGenerationState.taskId = currentTaskId;
+                }
+                localStorage.setItem('singleGenerationState', JSON.stringify(currentGenerationState));
+            }
+        }, 5000);
         
         function displayResults(data) {
             const resultImages = document.getElementById('resultImages');
@@ -1001,7 +1522,7 @@
             }
             // 默认加载
             loadSampleImages(sampleCategory);
-            loadFormData();
+            // 注意：loadFormData() 在 window.load 事件中调用，确保用户名已加载并检查用户匹配
             setupAutoSave();
         });
     </script>

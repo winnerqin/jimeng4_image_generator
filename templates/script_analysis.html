@@ -329,8 +329,7 @@
                 <textarea 
                     class="script-input" 
                     id="scriptInput" 
-                    placeholder="请输入剧本文本...&#10;&#10;示例：&#10;第一场 会议室&#10;人物：张三、李四&#10;...">
-                </textarea>
+                    placeholder="请输入剧本文本...&#10;&#10;示例：&#10;第一场 会议室&#10;人物：张三、李四&#10;..."></textarea>
                 <div class="button-group">
                     <button class="analyze-btn" id="analyzeBtn" onclick="analyzeScript()">🔍 分析剧本</button>
                     <button class="clear-btn" onclick="clearScript()">清除</button>
@@ -408,18 +407,34 @@
             const resultContainer = document.getElementById('resultContainer');
             let html = '';
             
-            // 人物设定
-            if (result.characters && result.characters.length > 0) {
+            // 主角设定
+            if (result.protagonist) {
                 html += '<div class="result-item">';
-                html += '<div class="result-title">👥 人物设定</div>';
-                result.characters.forEach(char => {
-                    html += `
-                        <div class="character-item">
-                            <div class="character-name">${escapeHtml(char.name)}</div>
-                            <div class="character-desc">${escapeHtml(char.description)}</div>
+                html += '<div class="result-title">👤 主角设定</div>';
+                const prot = result.protagonist;
+                html += `
+                    <div class="character-item">
+                        <div class="character-name">${escapeHtml(prot.name || '未命名')}</div>
+                        <div class="character-desc">
+                            <strong>年龄:</strong> ${escapeHtml(prot.age || '未指定')}<br>
+                            <strong>性别:</strong> ${escapeHtml(prot.gender || '未指定')}<br>
+                            <strong>外貌特征:</strong> ${escapeHtml(prot.appearance || '未描述')}<br>
+                            <strong>服饰风格:</strong> ${escapeHtml(prot.clothing || '未描述')}
                         </div>
-                    `;
-                });
+                    </div>
+                `;
+                html += '</div>';
+            }
+            
+            // 台词独白
+            if (result.monologue) {
+                html += '<div class="result-item">';
+                html += '<div class="result-title">💬 台词独白</div>';
+                html += `
+                    <div class="character-item">
+                        <div class="character-desc">${escapeHtml(result.monologue)}</div>
+                    </div>
+                `;
                 html += '</div>';
             }
             
@@ -428,17 +443,64 @@
                 html += '<div class="result-item">';
                 html += '<div class="result-title">🎬 分镜场景</div>';
                 result.scenes.forEach((scene, index) => {
+                    const sceneNum = scene.scene_number || (index + 1);
+                    const promptStruct = scene.prompt_structure || {};
                     html += `
                         <div class="scene-item">
-                            <div class="scene-name">第 ${index + 1} 场 - ${escapeHtml(scene.location)}</div>
+                            <div class="scene-name">第 ${sceneNum} 场</div>
                             <div class="scene-desc">
-<strong>描述:</strong> ${escapeHtml(scene.description)}
-<br><strong>人物:</strong> ${escapeHtml(scene.characters.join(', ') || '无')}
-<br><strong>场景设定:</strong> ${escapeHtml(scene.setting)}
+                                <strong>场景台词:</strong> ${escapeHtml(scene.dialogue || '无')}<br><br>
+                                <strong>提示词结构:</strong><br>
+                                • <strong>拍摄景别:</strong> ${escapeHtml(promptStruct.shot_type || '未指定')}<br>
+                                • <strong>人物景别:</strong> ${escapeHtml(promptStruct.character_shot || '未指定')}<br>
+                                • <strong>视角:</strong> ${escapeHtml(promptStruct.perspective || '未指定')}<br>
+                                • <strong>构图:</strong> ${escapeHtml(promptStruct.composition || '未指定')}<br>
+                                • <strong>核心主体:</strong> ${escapeHtml(promptStruct.core_subject || '未指定')}<br>
+                                • <strong>情绪动作:</strong> ${escapeHtml(promptStruct.emotion_action || '未指定')}<br>
+                                • <strong>环境场景:</strong> ${escapeHtml(promptStruct.environment || '未指定')}<br>
+                                • <strong>艺术风格:</strong> ${escapeHtml(promptStruct.art_style || '未指定')}<br>
+                                • <strong>氛围光线:</strong> ${escapeHtml(promptStruct.atmosphere_lighting || '未指定')}<br>
+                                • <strong>色调:</strong> ${escapeHtml(promptStruct.color_tone || '未指定')}<br><br>
+                                <strong>运镜语言:</strong> ${escapeHtml(scene.camera_movement || '未指定')}<br><br>
+                                <strong>音效设计:</strong> ${escapeHtml(scene.sound_effects || '未指定')}
                             </div>
                         </div>
                     `;
                 });
+                html += '</div>';
+            }
+            
+            // 风格色调
+            if (result.style_tone) {
+                html += '<div class="result-item">';
+                html += '<div class="result-title">🎨 风格色调</div>';
+                const style = result.style_tone;
+                const refStyles = style.reference_styles || [];
+                html += `
+                    <div class="character-item">
+                        <div class="character-desc">
+                            <strong>参考风格关键词:</strong> ${refStyles.length > 0 ? refStyles.map(s => escapeHtml(s)).join('、') : '未指定'}<br><br>
+                            <strong>画面质感:</strong> ${escapeHtml(style.visual_texture || '未描述')}<br><br>
+                            <strong>色调氛围:</strong> ${escapeHtml(style.color_atmosphere || '未描述')}
+                        </div>
+                    </div>
+                `;
+                html += '</div>';
+            }
+            
+            // 背景音乐
+            if (result.background_music) {
+                html += '<div class="result-item">';
+                html += '<div class="result-title">🎵 背景音乐</div>';
+                const music = result.background_music;
+                html += `
+                    <div class="character-item">
+                        <div class="character-desc">
+                            <strong>推荐音乐:</strong> ${escapeHtml(music.recommendation || '未推荐')}<br><br>
+                            <strong>选择理由:</strong> ${escapeHtml(music.reason || '未说明')}
+                        </div>
+                    </div>
+                `;
                 html += '</div>';
             }
             
@@ -459,7 +521,10 @@
         }
         
         function escapeHtml(text) {
-            if (!text) return '';
+            if (text === null || text === undefined) return '';
+            if (typeof text !== 'string') {
+                text = String(text);
+            }
             const map = {
                 '&': '&amp;',
                 '<': '&lt;',

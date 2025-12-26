@@ -994,27 +994,48 @@
         let currentBatchId = null;
         let progressPollingInterval = null;
         
-        // 页面加载时恢复进度日志
-        window.addEventListener('load', function() {
+        // 获取当前用户名（从页面中获取）
+        function getCurrentUsername() {
+            const usernameElement = document.querySelector('.username');
+            return usernameElement ? usernameElement.textContent.trim() : null;
+        }
+        
+        // 恢复批量任务状态的函数
+        function restoreBatchState() {
             const savedBatchId = localStorage.getItem('currentBatchId');
             const savedProgress = localStorage.getItem('batchProgress');
             const savedLogs = localStorage.getItem('batchLogs');
+            const savedBatchUsername = localStorage.getItem('batchUsername');
+            const currentUsername = getCurrentUsername();
             
+            // 检查用户是否匹配
+            if (savedBatchUsername && savedBatchUsername !== currentUsername) {
+                console.log('检测到不同用户的批量任务状态，清除旧状态');
+                localStorage.removeItem('currentBatchId');
+                localStorage.removeItem('batchProgress');
+                localStorage.removeItem('batchLogs');
+                localStorage.removeItem('batchUsername');
+                return false;
+            }
+            
+            // 恢复日志
             if (savedLogs) {
                 try {
                     generationLogs = JSON.parse(savedLogs);
                     const progressLog = document.getElementById('progressLog');
-                    progressLog.innerHTML = '';
-                    generationLogs.forEach(log => {
-                        const logDiv = document.createElement('div');
-                        logDiv.className = 'log-' + log.type;
-                        logDiv.textContent = log.message;
-                        progressLog.appendChild(logDiv);
-                    });
-                    
-                    // 如果有日志，显示进度区域
-                    if (generationLogs.length > 0) {
-                        document.getElementById('progressArea').classList.add('active');
+                    if (progressLog) {
+                        progressLog.innerHTML = '';
+                        generationLogs.forEach(log => {
+                            const logDiv = document.createElement('div');
+                            logDiv.className = 'log-' + log.type;
+                            logDiv.textContent = log.message;
+                            progressLog.appendChild(logDiv);
+                        });
+                        
+                        // 如果有日志，显示进度区域
+                        if (generationLogs.length > 0) {
+                            document.getElementById('progressArea').classList.add('active');
+                        }
                     }
                 } catch (e) {
                     console.error('恢复日志失败:', e);
@@ -1037,33 +1058,46 @@
                     generationStartTime = Date.now();
                 }
                 
-                document.getElementById('progressArea').classList.add('active');
-                addLog('🔄 检测到后台任务，恢复进度轮询...', 'info');
-                
-                // 立即查询一次进度
-                fetch(`/api/batch-progress/${currentBatchId}`)
-                    .then(res => res.json())
-                    .then(data => {
-                        if (data.success) {
-                            const progress = data.progress;
-                            const total = progress.total;
-                            
-                            // 开始轮询
-                            startProgressPolling(currentBatchId, total);
-                        } else {
-                            // 批次不存在，清理
-                            localStorage.removeItem('currentBatchId');
-                            localStorage.removeItem('batchProgress');
-                            isGenerating = false;
-                            addLog('⚠️ 批次任务不存在或已过期', 'error');
-                        }
-                    })
-                    .catch(error => {
-                        console.error('查询进度失败:', error);
-                        addLog('❌ 无法连接到服务器', 'error');
-                    });
+                const progressArea = document.getElementById('progressArea');
+                if (progressArea) {
+                    progressArea.classList.add('active');
+                    addLog('🔄 检测到后台任务，恢复进度轮询...', 'info');
+                    
+                    // 立即查询一次进度
+                    fetch(`/api/batch-progress/${currentBatchId}`)
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.success) {
+                                const progress = data.progress;
+                                const total = progress.total;
+                                
+                                // 如果任务还在进行中，恢复轮询
+                                if (progress.status === 'running') {
+                                    startProgressPolling(currentBatchId, total);
+                                    console.log('已恢复批量生成任务:', currentBatchId);
+                                } else {
+                                    // 任务已完成
+                                    isGenerating = false;
+                                    addLog(`✅ 任务已完成，成功: ${progress.completed}, 失败: ${progress.failed}`, 'success');
+                                }
+                            } else {
+                                // 批次不存在，清理
+                                localStorage.removeItem('currentBatchId');
+                                localStorage.removeItem('batchProgress');
+                                localStorage.removeItem('batchUsername');
+                                isGenerating = false;
+                                addLog('⚠️ 批次任务不存在或已过期', 'error');
+                            }
+                        })
+                        .catch(error => {
+                            console.error('查询进度失败:', error);
+                            addLog('❌ 无法连接到服务器', 'error');
+                        });
+                }
+                return true;
             }
             
+            // 处理旧版本数据（没有批次ID）
             if (savedProgress && !savedBatchId) {
                 try {
                     const data = JSON.parse(savedProgress);
@@ -1073,17 +1107,106 @@
                     if (data.completed < data.total && elapsed < 3600) {
                         isGenerating = true;
                         generationStartTime = data.startTime;
-                        document.getElementById('progressArea').classList.add('active');
-                        const percent = Math.round((data.completed / data.total) * 100);
-                        document.getElementById('progressFill').style.width = percent + '%';
-                        document.getElementById('progressFill').textContent = percent + '%';
-                        addLog(`页面已返回，当前进度: ${data.completed}/${data.total} (${percent}%)`, 'info');
+                        const progressArea = document.getElementById('progressArea');
+                        if (progressArea) {
+                            progressArea.classList.add('active');
+                            const percent = Math.round((data.completed / data.total) * 100);
+                            const progressFill = document.getElementById('progressFill');
+                            if (progressFill) {
+                                progressFill.style.width = percent + '%';
+                                progressFill.textContent = percent + '%';
+                            }
+                            addLog(`页面已返回，当前进度: ${data.completed}/${data.total} (${percent}%)`, 'info');
+                        }
+                        return true;
                     }
                 } catch (e) {
                     console.error('恢复进度失败:', e);
                 }
             }
+            
+            return false;
+        }
+        
+        // 页面加载时，先检查并清除不匹配用户的批量任务状态
+        window.addEventListener('load', function() {
+            const currentUsername = getCurrentUsername();
+            const savedBatchUsername = localStorage.getItem('batchUsername');
+            
+            // 如果保存的状态属于其他用户，清除它
+            if (savedBatchUsername && savedBatchUsername !== currentUsername) {
+                console.log('检测到不同用户的批量任务状态，清除旧状态');
+                localStorage.removeItem('currentBatchId');
+                localStorage.removeItem('batchProgress');
+                localStorage.removeItem('batchLogs');
+                localStorage.removeItem('batchUsername');
+            }
+            
+            // 然后恢复任务状态
+            restoreBatchState();
         });
+        
+        // 使用 pageshow 事件确保从缓存恢复时也能恢复状态
+        window.addEventListener('pageshow', function(event) {
+            // event.persisted 为 true 表示页面是从缓存中恢复的
+            if (event.persisted) {
+                console.log('页面从缓存恢复，检查批量任务状态...');
+                restoreBatchState();
+            }
+        });
+        
+        // 页面卸载前保存状态
+        window.addEventListener('beforeunload', function() {
+            if (isGenerating && currentBatchId) {
+                const currentUsername = getCurrentUsername();
+                localStorage.setItem('currentBatchId', currentBatchId);
+                localStorage.setItem('batchUsername', currentUsername);
+                localStorage.setItem('batchProgress', JSON.stringify({
+                    completed: 0,
+                    total: 0,
+                    startTime: generationStartTime
+                }));
+            }
+        });
+        
+        // 监听所有导航事件，在切换前保存状态
+        document.addEventListener('click', function(e) {
+            // 检查是否是导航链接
+            const link = e.target.closest('a');
+            if (link && link.href && !link.href.startsWith('javascript:') && !link.href.startsWith('#')) {
+                // 延迟一下，确保状态已更新
+                setTimeout(() => {
+                    if (isGenerating && currentBatchId) {
+                        const currentUsername = getCurrentUsername();
+                        localStorage.setItem('currentBatchId', currentBatchId);
+                        localStorage.setItem('batchUsername', currentUsername);
+                        if (generationStartTime) {
+                            localStorage.setItem('batchProgress', JSON.stringify({
+                                completed: 0,
+                                total: 0,
+                                startTime: generationStartTime
+                            }));
+                        }
+                    }
+                }, 100);
+            }
+        });
+        
+        // 定期保存批量任务状态（每5秒），防止状态丢失
+        setInterval(function() {
+            if (isGenerating && currentBatchId) {
+                const currentUsername = getCurrentUsername();
+                localStorage.setItem('currentBatchId', currentBatchId);
+                localStorage.setItem('batchUsername', currentUsername);
+                if (generationStartTime) {
+                    localStorage.setItem('batchProgress', JSON.stringify({
+                        completed: 0,
+                        total: 0,
+                        startTime: generationStartTime
+                    }));
+                }
+            }
+        }, 5000);
         
         // 开始批量生成
         async function startBatchGeneration() {
@@ -1153,8 +1276,15 @@
                     isGenerating = true;
                     generationStartTime = Date.now();
                     
-                    // 保存批次ID
+                    // 立即保存批次ID和状态（包含用户名）
+                    const currentUsername = getCurrentUsername();
                     localStorage.setItem('currentBatchId', currentBatchId);
+                    localStorage.setItem('batchUsername', currentUsername);
+                    localStorage.setItem('batchProgress', JSON.stringify({
+                        completed: 0,
+                        total: result.total_tasks,
+                        startTime: generationStartTime
+                    }));
                     
                     addLog(`✅ 任务已成功提交到服务端`, 'success');
                     addLog(`📋 批次ID: ${result.batch_id}`, 'info');
@@ -1235,7 +1365,9 @@
                 progressFill.style.width = percent + '%';
                 progressFill.textContent = percent + '%';
                 
-                // 保存进度到 localStorage
+                // 保存进度到 localStorage（包含用户名）
+                const currentUsername = getCurrentUsername();
+                localStorage.setItem('batchUsername', currentUsername);
                 localStorage.setItem('batchProgress', JSON.stringify({
                     completed: completed,
                     total: total,
@@ -1269,7 +1401,51 @@
                     document.getElementById('progressArea').classList.add('active');
                 }
                 
-                if (isGenerating) {
+                // 检查是否有正在进行的批次任务
+                const savedBatchId = localStorage.getItem('currentBatchId');
+                if (savedBatchId && (!progressPollingInterval || !isGenerating)) {
+                    // 恢复轮询
+                    currentBatchId = savedBatchId;
+                    isGenerating = true;
+                    document.getElementById('progressArea').classList.add('active');
+                    addLog('🔄 页面已返回，恢复进度轮询...', 'info');
+                    
+                    // 立即查询一次进度并恢复轮询
+                    fetch(`/api/batch-progress/${currentBatchId}`)
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.success) {
+                                const progress = data.progress;
+                                const total = progress.total;
+                                
+                                // 更新进度显示
+                                const completed = progress.completed + progress.failed;
+                                const percent = Math.round((completed / total) * 100);
+                                document.getElementById('progressFill').style.width = percent + '%';
+                                document.getElementById('progressFill').textContent = percent + '%';
+                                
+                                // 如果任务还在进行中，恢复轮询
+                                if (progress.status === 'running') {
+                                    startProgressPolling(currentBatchId, total);
+                                    addLog(`✅ 已恢复轮询，当前进度: ${completed}/${total} (${percent}%)`, 'info');
+                                } else {
+                                    isGenerating = false;
+                                    addLog(`✅ 任务已完成，成功: ${progress.completed}, 失败: ${progress.failed}`, 'success');
+                                }
+                            } else {
+                                // 批次不存在，清理
+                                localStorage.removeItem('currentBatchId');
+                                localStorage.removeItem('batchProgress');
+                                localStorage.removeItem('batchUsername');
+                                isGenerating = false;
+                                addLog('⚠️ 批次任务不存在或已过期', 'error');
+                            }
+                        })
+                        .catch(error => {
+                            console.error('查询进度失败:', error);
+                            addLog('❌ 无法连接到服务器', 'error');
+                        });
+                } else if (isGenerating) {
                     console.log('页面已返回，批量生成任务正在进行中');
                     // 恢复显示进度
                     const progress = localStorage.getItem('batchProgress');
@@ -1304,18 +1480,31 @@
                         const completed = progress.completed + progress.failed;
                         const percent = Math.round((completed / progress.total) * 100);
                         
+                        // 每次轮询都保存状态（关键：持续保存，包含用户名）
+                        const currentUsername = getCurrentUsername();
+                        localStorage.setItem('currentBatchId', batchId);
+                        localStorage.setItem('batchUsername', currentUsername);
+                        localStorage.setItem('batchProgress', JSON.stringify({
+                            completed: completed,
+                            total: progress.total,
+                            startTime: generationStartTime
+                        }));
+                        
                         // 更新进度条
                         const progressFill = document.getElementById('progressFill');
-                        progressFill.style.width = percent + '%';
-                        progressFill.textContent = `${completed}/${progress.total} (${percent}%)`;
-                        
-                        if (progress.status === 'completed') {
-                            progressFill.style.background = '#28a745';
-                        } else {
-                            progressFill.style.background = 'linear-gradient(90deg, #667eea 0%, #764ba2 100%)';
+                        if (progressFill) {
+                            progressFill.style.width = percent + '%';
+                            progressFill.textContent = `${completed}/${progress.total} (${percent}%)`;
+                            
+                            if (progress.status === 'completed') {
+                                progressFill.style.background = '#28a745';
+                            } else {
+                                progressFill.style.background = 'linear-gradient(90deg, #667eea 0%, #764ba2 100%)';
+                            }
                         }
                         
-                        // 更新进度到localStorage
+                        // 每次轮询都保存状态（关键：持续保存）
+                        localStorage.setItem('currentBatchId', batchId);
                         localStorage.setItem('batchProgress', JSON.stringify({
                             completed: completed,
                             total: progress.total,
@@ -1329,6 +1518,7 @@
                             isGenerating = false;
                             localStorage.removeItem('currentBatchId');
                             localStorage.removeItem('batchProgress');
+                            localStorage.removeItem('batchUsername');
                             
                             const elapsed = Math.round((Date.now() - generationStartTime) / 1000);
                             addLog('========================================', 'info');

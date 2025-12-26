@@ -212,6 +212,15 @@
         const btn = document.getElementById('loginBtn');
 
         form.addEventListener('submit', function() {
+            // 登录时清除所有旧的任务状态和表单数据（防止不同用户之间的状态混淆）
+            localStorage.removeItem('singleGenerationState');
+            localStorage.removeItem('currentBatchId');
+            localStorage.removeItem('batchProgress');
+            localStorage.removeItem('batchLogs');
+            localStorage.removeItem('batchUsername');
+            localStorage.removeItem('indexFormData'); // 清除表单数据
+            localStorage.removeItem('batchData'); // 清除批量数据
+            console.log('✅ 登录时已清除所有缓存数据');
             btn.disabled = true;
             btn.textContent = '登录中...';
         });
