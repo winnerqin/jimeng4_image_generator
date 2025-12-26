@@ -25,7 +25,8 @@ echo.
 
 REM 启动Web应用
 echo [*] 正在启动Web应用...
-echo     访问地址：http://localhost:5000
+echo     本地访问：http://localhost:5050
+echo     局域网访问：http://您的IP地址:5050
 echo.
 echo     按 Ctrl+C 停止服务器
 echo.
