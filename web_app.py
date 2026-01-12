@@ -5,6 +5,7 @@ import random
 import uuid
 import threading
 import logging
+import string
 from datetime import datetime
 from pathlib import Path
 from functools import wraps
@@ -12,6 +13,11 @@ from flask import Flask, render_template, request, jsonify, send_from_directory,
 from werkzeug.utils import secure_filename
 from openai import OpenAI
 import database
+
+def generate_random_filename(length=8):
+    """生成指定长度的随机文件名（仅包含字母和数字）"""
+    chars = string.ascii_lowercase + string.digits
+    return ''.join(random.choice(chars) for _ in range(length))
 
 # ==================== 日志工具 ====================
 # 配置日志记录
@@ -253,15 +259,15 @@ if dotenv_path:
     print(f'Loading .env from: {dotenv_path}')
     load_dotenv_file(dotenv_path)
 
-# 尺寸比例到像素的映射
+# 尺寸比例到像素的映射（根据方舟大模型2K/4K标准）
 ASPECT_RATIOS = {
-    '1:1': {'1k': (1024, 1024), '2k': (2048, 2048), '4k': (4096, 4096)},
-    '2:3': {'1k': (683, 1024), '2k': (1365, 2048), '4k': (2731, 4096)},
-    '3:2': {'1k': (1024, 683), '2k': (2048, 1365), '4k': (4096, 2731)},
-    '3:4': {'1k': (768, 1024), '2k': (1536, 2048), '4k': (3072, 4096)},
-    '4:3': {'1k': (1024, 768), '2k': (2048, 1536), '4k': (4096, 3072)},
-    '16:9': {'1k': (1024, 576), '2k': (2048, 1152), '4k': (4096, 2304)},
-    '9:16': {'1k': (576, 1024), '2k': (1152, 2048), '4k': (2304, 4096)},
+    '1:1': {'2k': (2048, 2048), '4k': (4096, 4096)},
+    '4:3': {'2k': (2560, 1920), '4k': (3840, 2880)},
+    '3:4': {'2k': (1920, 2560), '4k': (2880, 3840)},
+    '16:9': {'2k': (2560, 1920), '4k': (3840, 2160)},
+    '9:16': {'2k': (1440, 2560), '4k': (2160, 3840)},
+    '3:2': {'2k': (2560, 1706), '4k': (3840, 2560)},
+    '2:3': {'2k': (1706, 2560), '4k': (2560, 3840)},
 }
 
 # ==================== 登录验证装饰器 ====================
@@ -391,12 +397,11 @@ def generate():
         user_id = session.get('user_id')
         # 获取表单数据
         prompt = request.form.get('prompt', '').strip()
-        negative_prompt = request.form.get('negative_prompt', '').strip()
         aspect_ratio = request.form.get('aspect_ratio', '1:1')
         resolution = request.form.get('resolution', '2k')
         num_images = int(request.form.get('num_images', 1))
-        output_filename = request.form.get('output_filename', 'generated').strip()
-        steps = int(request.form.get('steps', 28))
+        sequential_count = int(request.form.get('sequential_count', 1))
+        image_style = request.form.get('image_style', '').strip()
         seed = int(request.form.get('seed', 0))
         
         log_request('POST', '/generate', user_id, 
@@ -470,7 +475,8 @@ def generate():
         
         # 生成图片
         generated_images = []
-        total_needed = num_images
+        # 如果使用组图生成，只调用一次API；否则按num_images循环
+        total_needed = 1 if sequential_count > 1 else num_images
         
         for i in range(total_needed):
             # 计算种子（方舟大模型 API 限制：最大 99999999）
@@ -484,44 +490,144 @@ def generate():
             
             # 构建提示词
             full_prompt = prompt
-            if negative_prompt:
-                full_prompt = f"{prompt}\n负面词: {negative_prompt}"
             
-            # 根据分辨率映射到方舟大模型支持的size格式
-            size_map = {
-                '1024x1024': '1K',
-                '2048x2048': '2K',
-                '1536x1536': '2K',
-            }
-            ark_size = size_map.get(f"{width}x{height}", "2K")
+            # 如果选择了风格，将风格的prompt合并到提示词中
+            if image_style:
+                try:
+                    styles_file = os.path.join('static', 'styles.json')
+                    if os.path.exists(styles_file):
+                        with open(styles_file, 'r', encoding='utf-8') as f:
+                            styles_data = json.load(f)
+                            style_obj = next((s for s in styles_data.get('styles', []) if s.get('id') == image_style), None)
+                            if style_obj:
+                                style_prompt = style_obj.get('prompt', '')
+                                if style_prompt:
+                                    # 将风格prompt合并到用户提示词中
+                                    full_prompt = f"{full_prompt}, {style_prompt}"
+                                    print(f"[风格合并] 原始提示词: {prompt}")
+                                    print(f"[风格合并] 风格: {style_obj.get('name', image_style)}")
+                                    print(f"[风格合并] 风格prompt: {style_prompt}")
+                                    print(f"[风格合并] 合并后提示词: {full_prompt}")
+                except Exception as e:
+                    print(f"[风格合并] 加载风格失败: {e}")
+                    import traceback
+                    traceback.print_exc()
             
             # 调用方舟大模型生成图片
+            # 使用 size 参数，格式为 "widthxheight"，如 "1440x2560"
+            # 支持使用参考图片（OSS示例图或用户上传的图片）
             try:
+                # 构建 size 参数
+                size_str = f"{width}x{height}"
+                
+                # 构建 extra_body，包含参考图片
+                extra_body_params = {
+                    "watermark": False,  # 默认不添加水印
+                }
+                
+                # 添加组图生成参数（仅在第一次生成时添加，因为组图功能会一次性生成多张）
+                if i == 0 and sequential_count > 1:
+                    extra_body_params["sequential_image_generation"] = "auto"
+                    extra_body_params["sequential_image_generation_options"] = {
+                        "max_images": sequential_count
+                    }
+                
+                # 添加参考图片参数
+                if image_urls:
+                    if len(image_urls) == 1:
+                        # 单张图片使用 image 参数
+                        extra_body_params["image"] = image_urls[0]
+                    else:
+                        # 多张图片使用 image_urls 参数（如果API支持）
+                        extra_body_params["image_urls"] = image_urls
+                        # 或者使用第一张图片作为主要参考图
+                        extra_body_params["image"] = image_urls[0]
+                
+                # ========== 记录输入内容 ==========
+                input_details = {
+                    'model': 'doubao-seedream-4-5-251128',
+                    'prompt': full_prompt[:200] + '...' if len(full_prompt) > 200 else full_prompt,
+                    'size': size_str,
+                    'width': width,
+                    'height': height,
+                    'aspect_ratio': aspect_ratio,
+                    'resolution': resolution,
+                    'seed': per_seed,
+                    'image_style': image_style,
+                    'num_images': 1,
+                    'sequential_count': sequential_count,
+                    'reference_images_count': len(image_urls),
+                    'reference_images': image_urls[:3] if len(image_urls) > 3 else image_urls  # 只记录前3张
+                }
+                
+                log_operation('API调用输入', f'用户ID={user_id}, 第{i+1}张 | {json.dumps(input_details, ensure_ascii=False, indent=2)}')
+                print("=" * 80)
+                print(f"[输入] 第 {i+1}/{total_needed} 张图片生成请求:")
+                print(f"  模型: {input_details['model']}")
+                print(f"  原始提示词: {prompt}")
+                print(f"  合并后提示词: {full_prompt}")
+                print(f"  尺寸: {size_str} ({width}x{height})")
+                print(f"  宽高比: {aspect_ratio}, 分辨率: {resolution}")
+                print(f"  种子值: {per_seed}, 风格: {image_style if image_style else '无'}")
+                if sequential_count > 1:
+                    print(f"  组图数量: {sequential_count}")
+                print(f"  参考图数量: {len(image_urls)}")
+                if image_urls:
+                    print(f"  参考图URL: {image_urls}")
+                print("=" * 80)
+                
                 response = client.images.generate(
                     model="doubao-seedream-4-5-251128",
                     prompt=full_prompt,
-                    size=ark_size,
+                    size=size_str,
                     response_format="url",
-                    extra_body={
-                        "watermark": False,
-                    }
+                    extra_body=extra_body_params
                 )
                 
-                # 处理响应
+                # ========== 记录输出内容 ==========
                 if response.data and len(response.data) > 0:
                     img_url = response.data[0].url
                     
-                    # 下载图片
-                    import requests
-                    img_response = requests.get(img_url)
-                    if img_response.status_code == 200:
-                        img_data = img_response.content
+                    output_details = {
+                        'status': 'success',
+                        'generated_image_url': img_url,
+                        'response_data_count': len(response.data),
+                        'model': 'doubao-seedream-4-5-251128'
+                    }
+                    
+                    log_operation('API调用输出', f'用户ID={user_id}, 第{i+1}张 | {json.dumps(output_details, ensure_ascii=False, indent=2)}')
+                    print("=" * 80)
+                    print(f"[输出] 第 {i+1}/{total_needed} 张图片生成响应:")
+                    print(f"  状态: 成功")
+                    print(f"  生成图片URL: {img_url}")
+                    print(f"  响应数据数量: {len(response.data)}")
+                    print("=" * 80)
+                else:
+                    log_operation('API调用输出', f'用户ID={user_id}, 第{i+1}张 | 状态=失败, 响应数据为空', 'WARNING')
+                    print(f"[输出] 第 {i+1}/{total_needed} 张图片生成响应: 失败 - 响应数据为空")
+                
+                # 处理响应（组图生成可能返回多张图片）
+                if response.data and len(response.data) > 0:
+                    # 如果使用组图生成，处理所有返回的图片
+                    images_to_process = response.data if (i == 0 and sequential_count > 1) else [response.data[0]]
+                    
+                    for img_idx, img_data_obj in enumerate(images_to_process):
+                        img_url = img_data_obj.url
                         
-                        # 生成文件名
-                        if num_images > 1:
-                            filename = f"{output_filename}_{i+1}.jpg"
-                        else:
-                            filename = f"{output_filename}.jpg"
+                        # 下载图片
+                        import requests
+                        img_response = requests.get(img_url)
+                        if img_response.status_code == 200:
+                            img_data = img_response.content
+                            
+                            # 生成8位随机文件名，避免重复
+                            random_name = generate_random_filename(8)
+                            if sequential_count > 1:
+                                filename = f"{random_name}_{img_idx+1}.jpg"
+                            elif num_images > 1:
+                                filename = f"{random_name}_{i+1}.jpg"
+                            else:
+                                filename = f"{random_name}.jpg"
                         
                         # 使用用户专属输出目录
                         user_output_folder = get_user_output_folder(user_id)
@@ -529,55 +635,121 @@ def generate():
                         with open(output_path, 'wb') as f:
                             f.write(img_data)
                         
-                        generated_images.append({
-                            'filename': filename,
-                            'url': f'/output/{user_id}/{filename}',
-                            'seed': per_seed
-                        })
+                        # 如果配置了OSS，上传到OSS并获取公共URL（用于作为参考图）
+                        image_url = f'/output/{user_id}/{filename}'  # 默认使用本地URL
+                        if oss_enabled:
+                            oss_url = upload_to_aliyun_oss(output_path, user_id=user_id)
+                            if oss_url:
+                                image_url = oss_url
+                                log_operation('OSS上传成功', f'用户ID={user_id}, 文件={filename}, OSS_URL={oss_url}')
+                                print(f"[OSS] 成功上传生成的图片到OSS: {oss_url}")
+                            else:
+                                log_operation('OSS上传失败', f'用户ID={user_id}, 文件={filename}', 'WARNING')
+                                print(f"[OSS] 警告：生成的图片上传到OSS失败，使用本地URL")
                         
-                        # 保存记录到数据库
-                        try:
-                            sample_images_list = [{'url': url, 'filename': os.path.basename(url)} for url in image_urls]
-                            database.save_generation_record({
-                                'user_id': user_id,
-                                'prompt': prompt,
-                                'negative_prompt': negative_prompt,
-                                'aspect_ratio': aspect_ratio,
-                                'resolution': resolution,
-                                'width': width,
-                                'height': height,
+                            # 记录最终输出结果
+                            final_output = {
+                                'filename': filename,
+                                'local_path': output_path,
+                                'final_url': image_url,
+                                'file_size': len(img_data),
+                                'seed': per_seed
+                            }
+                            img_index = img_idx + 1 if sequential_count > 1 else i + 1
+                            log_operation('图片处理完成', f'用户ID={user_id}, 第{img_index}张 | {json.dumps(final_output, ensure_ascii=False)}')
+                            print(f"[完成] 第 {img_index} 张图片处理完成:")
+                            print(f"  文件名: {filename}")
+                            print(f"  本地路径: {output_path}")
+                            print(f"  最终URL: {image_url}")
+                            print(f"  文件大小: {len(img_data)} bytes")
+                            print(f"  种子值: {per_seed}")
+                        
+                            generated_images.append({
+                                'filename': filename,
+                                'url': image_url,
+                                'seed': per_seed
+                            })
+                            
+                            # 保存记录到数据库
+                            try:
+                                sample_images_list = [{'url': url, 'filename': os.path.basename(url)} for url in image_urls]
+                                database.save_generation_record({
+                                    'user_id': user_id,
+                                    'prompt': prompt,
+                                    'aspect_ratio': aspect_ratio,
+                                    'resolution': resolution,
+                                    'width': width,
+                                    'height': height,
                                 'num_images': 1,
                                 'seed': per_seed,
-                                'steps': steps,
+                                'image_style': image_style,
                                 'sample_images': sample_images_list,
-                                'image_path': f'/output/{user_id}/{filename}',
-                                'filename': filename,
-                                'status': 'success'
-                            })
-                        except Exception as db_err:
-                            print(f"保存记录失败: {db_err}")
+                                'image_path': image_url,  # 使用image_url（可能是OSS URL或本地URL）
+                                    'filename': filename,
+                                    'status': 'success'
+                                })
+                            except Exception as db_err:
+                                log_operation('保存记录失败', f'用户ID={user_id}, 文件={filename}, 错误={str(db_err)}', 'WARNING')
+                                print(f"[警告] 保存记录失败: {db_err}")
+                        else:
+                            log_operation('下载图片失败', f'用户ID={user_id}, URL={img_url}, 状态码={img_response.status_code}', 'WARNING')
+                            print(f"[警告] 下载图片失败: HTTP {img_response.status_code}")
                 else:
-                    print(f"API 返回错误: 无法获取图片")
+                    log_operation('API返回错误', f'用户ID={user_id}, 第{i+1}张 | 无法获取图片', 'WARNING')
+                    print(f"[警告] API 返回错误: 无法获取图片")
             except Exception as e:
-                print(f"生成第 {i+1} 张图片时出错: {e}")
+                error_details = {
+                    'error': str(e),
+                    'error_type': type(e).__name__,
+                    'image_index': i+1,
+                    'total': total_needed
+                }
+                log_operation('生成图片失败', f'用户ID={user_id}, 第{i+1}张 | {json.dumps(error_details, ensure_ascii=False)}', 'ERROR')
+                print("=" * 80)
+                print(f"[错误] 第 {i+1}/{total_needed} 张图片生成失败:")
+                print(f"  错误类型: {type(e).__name__}")
+                print(f"  错误信息: {str(e)}")
+                import traceback
+                print(f"  错误详情:\n{traceback.format_exc()}")
+                print("=" * 80)
                 continue
         
         if not generated_images:
             log_operation('生成失败', f'用户ID: {user_id}, 原因: 无法生成图片', 'ERROR')
+            print("=" * 80)
+            print(f"[最终结果] 生成失败 - 没有成功生成任何图片")
+            print("=" * 80)
             return jsonify({'error': '图片生成失败，请检查参数'}), 500
         
-        log_operation('图片生成成功', f'用户ID: {user_id}, 生成数量: {len(generated_images)}, 提示词: {prompt[:50]}...')
+        # 记录最终生成结果
+        final_result = {
+            'user_id': user_id,
+            'total_requested': num_images,
+            'total_generated': len(generated_images),
+            'prompt_preview': prompt[:100] + '...' if len(prompt) > 100 else prompt,
+            'generated_files': [{'filename': img['filename'], 'url': img['url']} for img in generated_images]
+        }
+        log_operation('图片生成成功', f'用户ID={user_id} | {json.dumps(final_result, ensure_ascii=False, indent=2)}')
+        print("=" * 80)
+        print(f"[最终结果] 生成成功:")
+        print(f"  请求数量: {num_images}")
+        print(f"  成功生成: {len(generated_images)}")
+        print(f"  提示词预览: {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
+        print(f"  生成的文件:")
+        for img in generated_images:
+            print(f"    - {img['filename']}: {img['url']}")
+        print("=" * 80)
         return jsonify({
             'success': True,
             'images': generated_images,
             'params': {
                 'prompt': prompt,
-                'negative_prompt': negative_prompt,
                 'aspect_ratio': aspect_ratio,
                 'resolution': resolution,
                 'width': width,
                 'height': height,
-                'num_images': num_images
+                'num_images': num_images,
+                'image_style': image_style
             }
         })
     
@@ -659,6 +831,60 @@ def get_sample_images():
             'images': []
         })
 
+@app.route('/api/image-styles')
+@login_required
+def get_image_styles():
+    """获取图片风格列表"""
+    try:
+        styles_file = os.path.join('static', 'styles.json')
+        if os.path.exists(styles_file):
+            with open(styles_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return jsonify({'success': True, 'styles': data.get('styles', [])})
+        else:
+            return jsonify({'success': False, 'error': '风格文件不存在'}), 404
+    except Exception as e:
+        log_operation('获取风格列表失败', f'错误: {str(e)}', 'ERROR')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/recent-images')
+@login_required
+def get_recent_images():
+    """获取最近生成的图片列表（用作参考图）"""
+    try:
+        user_id = session.get('user_id')
+        limit = int(request.args.get('limit', 50))  # 默认获取最近50张
+        
+        log_request('GET', '/api/recent-images', user_id, f'数量: {limit}')
+        
+        # 从数据库获取最近生成的图片记录
+        records = database.get_all_records(user_id, limit=limit, offset=0)
+        
+        # 提取图片信息，只返回OSS URL的图片（API可以访问的）
+        recent_images = []
+        for record in records:
+            image_path = record.get('image_path', '')
+            if image_path and image_path.startswith('https://'):
+                # 只包含OSS URL的图片
+                recent_images.append({
+                    'url': image_path,
+                    'filename': record.get('filename', 'generated.jpg'),
+                    'created_at': record.get('created_at', ''),
+                    'prompt': record.get('prompt', '')[:50] + '...' if len(record.get('prompt', '')) > 50 else record.get('prompt', ''),
+                    'key': f"recent_{record.get('id')}",
+                    'category': 'recent'
+                })
+        
+        log_operation('获取最近生成图片', f'用户ID: {user_id}, 数量: {len(recent_images)}')
+        return jsonify({'success': True, 'images': recent_images})
+    
+    except Exception as e:
+        user_id = session.get('user_id')
+        log_operation('获取最近生成图片失败', f'用户ID: {user_id}, 错误: {str(e)}', 'ERROR')
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/batch')
 @login_required
 def batch():
@@ -694,7 +920,6 @@ def batch_generate():
         
         # 获取参数
         prompt = data.get('prompt', '').strip()
-        negative_prompt = data.get('negative_prompt', '').strip()
         aspect_ratio = data.get('aspect_ratio', '1:1')
         resolution = data.get('resolution', '2k')
         sample_images_data = data.get('sample_images', [])
@@ -726,32 +951,98 @@ def batch_generate():
         # 生成图片
         generated_images = []
         
+        # 获取风格设置
+        image_style = data.get('image_style', '').strip()
+        
         for i in range(num_images):
             per_seed = random.randint(1, 99999999)
             
             # 构建提示词
             full_prompt = prompt
-            if negative_prompt:
-                full_prompt = f"{prompt}\n负面词: {negative_prompt}"
             
-            # 根据分辨率映射到方舟大模型支持的size格式
-            size_map = {
-                '1024x1024': '1K',
-                '2048x2048': '2K',
-                '1536x1536': '2K',
-            }
-            ark_size = size_map.get(f"{width}x{height}", "2K")
+            # 如果选择了风格，将风格添加到提示词中
+            if image_style:
+                try:
+                    styles_file = os.path.join('static', 'styles.json')
+                    if os.path.exists(styles_file):
+                        with open(styles_file, 'r', encoding='utf-8') as f:
+                            styles_data = json.load(f)
+                            style_obj = next((s for s in styles_data.get('styles', []) if s.get('id') == image_style), None)
+                            if style_obj:
+                                style_prompt = style_obj.get('prompt', '')
+                                if style_prompt:
+                                    full_prompt = f"{full_prompt}, {style_prompt}"
+                except Exception as e:
+                    print(f"加载风格失败: {e}")
             
+            # 调用方舟大模型生成图片
+            # 使用 size 参数，格式为 "widthxheight"，如 "1440x2560"
+            # 支持使用参考图片（OSS示例图或用户上传的图片）
             try:
+                # 构建 size 参数
+                size_str = f"{width}x{height}"
+                
+                # 构建 extra_body，包含参考图片
+                extra_body_params = {
+                    "watermark": False,  # 默认不添加水印
+                }
+                
+                # 添加参考图片参数
+                if image_urls:
+                    if len(image_urls) == 1:
+                        # 单张图片使用 image 参数
+                        extra_body_params["image"] = image_urls[0]
+                    else:
+                        # 多张图片使用 image_urls 参数（如果API支持）
+                        extra_body_params["image_urls"] = image_urls
+                        # 或者使用第一张图片作为主要参考图
+                        extra_body_params["image"] = image_urls[0]
+                
+                # ========== 记录输入内容 ==========
+                input_details = {
+                    'model': 'doubao-seedream-4-5-251128',
+                    'prompt': full_prompt[:200] + '...' if len(full_prompt) > 200 else full_prompt,
+                    'size': size_str,
+                    'width': width,
+                    'height': height,
+                    'aspect_ratio': aspect_ratio,
+                    'resolution': resolution,
+                    'seed': per_seed,
+                    'image_style': image_style,
+                    'reference_images_count': len(image_urls),
+                    'reference_images': image_urls[:3] if len(image_urls) > 3 else image_urls
+                }
+                log_operation('批量生成API调用输入', f'用户ID={user_id}, 批次={batch_id}, 第{i+1}张 | {json.dumps(input_details, ensure_ascii=False, indent=2)}')
+                print("=" * 80)
+                print(f"[批量生成-输入] 批次: {batch_id}, 第 {i+1}/{num_images} 张:")
+                print(f"  原始提示词: {prompt}")
+                print(f"  合并后提示词: {full_prompt}")
+                print(f"  尺寸: {size_str} ({width}x{height})")
+                print(f"  风格: {image_style if image_style else '无'}")
+                print(f"  参考图数量: {len(image_urls)}")
+                print("=" * 80)
+                
                 response = client.images.generate(
                     model="doubao-seedream-4-5-251128",
                     prompt=full_prompt,
-                    size=ark_size,
+                    size=size_str,
                     response_format="url",
-                    extra_body={
-                        "watermark": False,
-                    }
+                    extra_body=extra_body_params
                 )
+                
+                # ========== 记录输出内容 ==========
+                if response.data and len(response.data) > 0:
+                    img_url = response.data[0].url
+                    output_details = {
+                        'status': 'success',
+                        'generated_image_url': img_url,
+                        'response_data_count': len(response.data)
+                    }
+                    log_operation('批量生成API调用输出', f'用户ID={user_id}, 批次={batch_id}, 第{i+1}张 | {json.dumps(output_details, ensure_ascii=False)}')
+                    print(f"[批量生成-输出] 批次: {batch_id}, 第 {i+1}/{num_images} 张: 成功, URL={img_url}")
+                else:
+                    log_operation('批量生成API调用输出', f'用户ID={user_id}, 批次={batch_id}, 第{i+1}张 | 状态=失败, 响应数据为空', 'WARNING')
+                    print(f"[批量生成-输出] 批次: {batch_id}, 第 {i+1}/{num_images} 张: 失败 - 响应数据为空")
                 
                 if response.data and len(response.data) > 0:
                     img_url = response.data[0].url
@@ -762,10 +1053,12 @@ def batch_generate():
                     if img_response.status_code == 200:
                         img_data = img_response.content
                         
+                        # 生成8位随机文件名，避免重复
+                        random_name = generate_random_filename(8)
                         if num_images > 1:
-                            filename = f"{filename_base}_{i+1}.jpg"
+                            filename = f"{random_name}_{i+1}.jpg"
                         else:
-                            filename = f"{filename_base}.jpg"
+                            filename = f"{random_name}.jpg"
                         
                         # 使用用户专属输出目录
                         user_output_folder = get_user_output_folder(user_id)
@@ -773,9 +1066,30 @@ def batch_generate():
                         with open(output_path, 'wb') as f:
                             f.write(img_data)
                         
+                        # 如果配置了OSS，上传到OSS并获取公共URL（用于作为参考图）
+                        image_url = f'/output/{user_id}/{filename}'  # 默认使用本地URL
+                        oss_enabled = os.environ.get('OSS_ENABLED', 'false').lower() == 'true'
+                        if oss_enabled:
+                            oss_url = upload_to_aliyun_oss(output_path, user_id=user_id)
+                            if oss_url:
+                                image_url = oss_url
+                                log_operation('批量生成OSS上传成功', f'用户ID={user_id}, 批次={batch_id}, 文件={filename}, OSS_URL={oss_url}')
+                                print(f"[批量生成-OSS] 成功上传生成的图片到OSS: {oss_url}")
+                        
+                        # 记录最终输出结果
+                        final_output = {
+                            'filename': filename,
+                            'local_path': output_path,
+                            'final_url': image_url,
+                            'file_size': len(img_data),
+                            'seed': per_seed
+                        }
+                        log_operation('批量生成图片处理完成', f'用户ID={user_id}, 批次={batch_id}, 第{i+1}张 | {json.dumps(final_output, ensure_ascii=False)}')
+                        print(f"[批量生成-完成] 批次: {batch_id}, 第 {i+1}/{num_images} 张: 文件名={filename}, URL={image_url}")
+                        
                         generated_images.append({
                             'filename': filename,
-                            'url': f'/output/{user_id}/{filename}',
+                            'url': image_url,
                             'seed': per_seed
                         })
                         
@@ -784,14 +1098,13 @@ def batch_generate():
                             database.save_generation_record({
                                 'user_id': user_id,
                                 'prompt': prompt,
-                                'negative_prompt': negative_prompt,
                                 'aspect_ratio': aspect_ratio,
                                 'resolution': resolution,
                                 'width': width,
                                 'height': height,
                                 'num_images': 1,
                                 'seed': per_seed,
-                                'steps': 28,
+                                'image_style': image_style,
                                 'sample_images': sample_images_data,
                                 'image_path': f'/output/{user_id}/{filename}',
                                 'filename': filename,
@@ -1295,8 +1608,8 @@ def process_single_batch_task(task, batch_id, user_id):
     """处理单个批量任务"""
     try:
         prompt = task.get('prompt', '').strip()
-        negative_prompt = task.get('negative_prompt', '').strip()
         aspect_ratio = task.get('aspect_ratio', '1:1')
+        image_style = task.get('image_style', '').strip()
         resolution = task.get('resolution', '2k')
         sample_images_data = task.get('sample_images', [])
         num_images = int(task.get('num_images', 1))
@@ -1330,26 +1643,58 @@ def process_single_batch_task(task, batch_id, user_id):
             
             # 构建提示词
             full_prompt = prompt
-            if negative_prompt:
-                full_prompt = f"{prompt}\n负面词: {negative_prompt}"
             
-            # 根据分辨率映射到方舟大模型支持的size格式
-            size_map = {
-                '1024x1024': '1K',
-                '2048x2048': '2K',
-                '1536x1536': '2K',
-            }
-            ark_size = size_map.get(f"{width}x{height}", "2K")
+            # 如果选择了风格，将风格的prompt合并到提示词中
+            if image_style:
+                try:
+                    styles_file = os.path.join('static', 'styles.json')
+                    if os.path.exists(styles_file):
+                        with open(styles_file, 'r', encoding='utf-8') as f:
+                            styles_data = json.load(f)
+                            style_obj = next((s for s in styles_data.get('styles', []) if s.get('id') == image_style), None)
+                            if style_obj:
+                                style_prompt = style_obj.get('prompt', '')
+                                if style_prompt:
+                                    # 将风格prompt合并到用户提示词中
+                                    full_prompt = f"{full_prompt}, {style_prompt}"
+                                    print(f"[风格合并] 原始提示词: {prompt}")
+                                    print(f"[风格合并] 风格: {style_obj.get('name', image_style)}")
+                                    print(f"[风格合并] 风格prompt: {style_prompt}")
+                                    print(f"[风格合并] 合并后提示词: {full_prompt}")
+                except Exception as e:
+                    print(f"[风格合并] 加载风格失败: {e}")
+                    import traceback
+                    traceback.print_exc()
             
+            # 调用方舟大模型生成图片
+            # 使用 size 参数，格式为 "widthxheight"，如 "1440x2560"
+            # 支持使用参考图片（OSS示例图或用户上传的图片）
             try:
+                # 构建 size 参数
+                size_str = f"{width}x{height}"
+                
+                # 构建 extra_body，包含参考图片
+                extra_body_params = {
+                    "watermark": False,  # 默认不添加水印
+                }
+                
+                # 添加参考图片参数
+                if image_urls:
+                    if len(image_urls) == 1:
+                        # 单张图片使用 image 参数
+                        extra_body_params["image"] = image_urls[0]
+                    else:
+                        # 多张图片使用 image_urls 参数（如果API支持）
+                        extra_body_params["image_urls"] = image_urls
+                        # 或者使用第一张图片作为主要参考图
+                        extra_body_params["image"] = image_urls[0]
+                
                 response = client.images.generate(
                     model="doubao-seedream-4-5-251128",
                     prompt=full_prompt,
-                    size=ark_size,
+                    size=size_str,
                     response_format="url",
-                    extra_body={
-                        "watermark": False,
-                    }
+                    extra_body=extra_body_params
                 )
                 
                 if response.data and len(response.data) > 0:
@@ -1361,10 +1706,12 @@ def process_single_batch_task(task, batch_id, user_id):
                     if img_response.status_code == 200:
                         img_data = img_response.content
                     
+                        # 生成8位随机文件名，避免重复
+                        random_name = generate_random_filename(8)
                         if num_images > 1:
-                            filename = f"{filename_base}_{i+1}.jpg"
+                            filename = f"{random_name}_{i+1}.jpg"
                         else:
-                            filename = f"{filename_base}.jpg"
+                            filename = f"{random_name}.jpg"
                         
                         # 使用用户专属输出目录
                         user_output_folder = os.path.join('output', str(user_id))
@@ -1373,25 +1720,29 @@ def process_single_batch_task(task, batch_id, user_id):
                         with open(filepath, 'wb') as f:
                             f.write(img_data)
                         
-                        # 上传到 OSS
-                        oss_url = upload_to_aliyun_oss(filepath)
+                        # 上传到 OSS（如果配置了OSS）
+                        image_url = f'/output/{user_id}/{filename}'  # 默认使用本地URL
+                        oss_enabled = os.environ.get('OSS_ENABLED', 'false').lower() == 'true'
+                        if oss_enabled:
+                            oss_url = upload_to_aliyun_oss(filepath, user_id=user_id)
+                            if oss_url:
+                                image_url = oss_url
+                                print(f"成功上传生成的图片到OSS: {oss_url}")
                         
-                        # 保存记录
-                        if oss_url:
-                            database.save_generation_record({
-                                'user_id': user_id,
-                                'prompt': prompt,
-                                'negative_prompt': negative_prompt,
-                                'aspect_ratio': aspect_ratio,
-                                'resolution': resolution,
-                                'width': width,
-                                'height': height,
-                                'num_images': 1,
-                                'seed': per_seed,
-                                'steps': 28,
-                                'sample_images': sample_images_data,
-                                'image_path': oss_url,
-                                'filename': filename,
+                        # 保存记录（无论是否上传到OSS都保存）
+                        database.save_generation_record({
+                            'user_id': user_id,
+                            'prompt': prompt,
+                            'aspect_ratio': aspect_ratio,
+                            'resolution': resolution,
+                            'width': width,
+                            'height': height,
+                            'num_images': 1,
+                            'seed': per_seed,
+                            'image_style': image_style,
+                            'sample_images': sample_images_data,
+                            'image_path': image_url,  # 使用image_url（可能是OSS URL或本地URL）
+                            'filename': filename,
                                 'batch_id': batch_id,
                                 'status': 'success'
                             })

@@ -84,20 +84,8 @@
             overflow: hidden;
         }
         
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px;
-            text-align: center;
-        }
-        
-        .header h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
-        }
-        
         .content {
-            padding: 30px;
+            padding: 20px;
         }
         
         .section {
@@ -455,12 +443,7 @@
     </div>
     
     <div class="container">
-        <div class="header">
-            <h1>📦 批量图片生成</h1>
-            <p>导入Excel或手动添加，批量生成AI图片</p>
-        </div>
-        
-        <div class="content">
+        <div class="content" style="padding-top: 20px;">
             <!-- 导入/导出区域 -->
             <div class="section">
                 <div class="section-title">📥 导入/导出</div>
@@ -730,7 +713,6 @@
                     </td>
                     <td>
                         <select onchange="updateRow(${index}, 'resolution', this.value)">
-                            <option value="1k" ${row.resolution === '1k' ? 'selected' : ''}>1K</option>
                             <option value="2k" ${row.resolution === '2k' ? 'selected' : ''}>2K</option>
                             <option value="4k" ${row.resolution === '4k' ? 'selected' : ''}>4K</option>
                         </select>

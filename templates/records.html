@@ -85,20 +85,8 @@
             overflow: hidden;
         }
         
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px;
-            text-align: center;
-        }
-        
-        .header h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
-        }
-        
         .content {
-            padding: 30px;
+            padding: 20px;
         }
         
         .filter-bar {
@@ -415,12 +403,7 @@
     </div>
     
     <div class="container">
-        <div class="header">
-            <h1>📊 生成记录</h1>
-            <p>查看所有图片生成历史记录</p>
-        </div>
-        
-        <div class="content">
+        <div class="content" style="padding-top: 20px;">
             <div class="filter-bar">
                 <input type="text" id="searchInput" placeholder="搜索提示词..." onkeyup="handleSearch(event)">
                 <button onclick="loadRecords()">🔍 搜索</button>
@@ -526,7 +509,10 @@
                     records = data.records;
                     totalRecords = data.total;
                     
-                    document.getElementById('totalCount').textContent = totalRecords;
+                    const totalCountEl = document.getElementById('totalCount');
+                    if (totalCountEl) {
+                        totalCountEl.textContent = totalRecords;
+                    }
                     
                     if (records.length === 0) {
                         empty.style.display = 'block';
@@ -725,8 +711,14 @@
         function updatePagination() {
             const totalPages = Math.ceil(totalRecords / pageSize);
             
-            document.getElementById('currentPage').textContent = currentPage;
-            document.getElementById('totalPages').textContent = totalPages;
+            const currentPageEl = document.getElementById('currentPage');
+            const totalPagesEl = document.getElementById('totalPages');
+            if (currentPageEl) {
+                currentPageEl.textContent = currentPage;
+            }
+            if (totalPagesEl) {
+                totalPagesEl.textContent = totalPages;
+            }
             document.getElementById('prevBtn').disabled = currentPage <= 1;
             document.getElementById('nextBtn').disabled = currentPage >= totalPages;
         }
@@ -767,15 +759,20 @@
             const downloadCountSpan = document.getElementById('selectedCount');
             const deleteCountSpan = document.getElementById('selectedCountDelete');
             
-            downloadCountSpan.textContent = count;
-            deleteCountSpan.textContent = count;
+            // 安全地更新计数，检查元素是否存在
+            if (downloadCountSpan) {
+                downloadCountSpan.textContent = count;
+            }
+            if (deleteCountSpan) {
+                deleteCountSpan.textContent = count;
+            }
             
-            if (count > 0) {
-                downloadBtn.style.display = 'inline-block';
-                deleteBtn.style.display = 'inline-block';
-            } else {
-                downloadBtn.style.display = 'none';
-                deleteBtn.style.display = 'none';
+            // 安全地显示/隐藏按钮，检查元素是否存在
+            if (downloadBtn) {
+                downloadBtn.style.display = count > 0 ? 'inline-block' : 'none';
+            }
+            if (deleteBtn) {
+                deleteBtn.style.display = count > 0 ? 'inline-block' : 'none';
             }
             
             // 更新全选复选框状态
@@ -794,6 +791,11 @@
             }
             
             const btn = document.getElementById('batchDownloadBtn');
+            if (!btn) {
+                alert('批量下载按钮未找到，请刷新页面重试');
+                return;
+            }
+            
             btn.disabled = true;
             btn.textContent = '打包中...';
             
@@ -810,7 +812,9 @@
                 // 逐个下载图片并添加到zip
                 for (let i = 0; i < selectedItems.length; i++) {
                     const record = selectedItems[i];
-                    btn.textContent = `打包中 ${i + 1}/${selectedItems.length}...`;
+                    if (btn) {
+                        btn.textContent = `打包中 ${i + 1}/${selectedItems.length}...`;
+                    }
                     
                     try {
                         const response = await fetch(record.image_path);
@@ -829,7 +833,9 @@
                 }
                 
                 // 生成zip文件
-                btn.textContent = '生成压缩包...';
+                if (btn) {
+                    btn.textContent = '生成压缩包...';
+                }
                 const content = await zip.generateAsync({ type: 'blob' });
                 
                 // 下载
@@ -842,8 +848,10 @@
                 console.error('批量下载失败:', error);
                 alert('批量下载失败: ' + error.message);
             } finally {
-                btn.disabled = false;
-                btn.innerHTML = '📦 批量下载 (<span id="selectedCount">' + selectedRecords.size + '</span>)';
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '📦 批量下载 (<span id="selectedCount">' + selectedRecords.size + '</span>)';
+                }
             }
         }
         
@@ -859,6 +867,11 @@
             }
             
             const btn = document.getElementById('batchDeleteBtn');
+            if (!btn) {
+                alert('批量删除按钮未找到，请刷新页面重试');
+                return;
+            }
+            
             btn.disabled = true;
             const originalText = btn.innerHTML;
             btn.textContent = '删除中...';
@@ -880,7 +893,10 @@
                     
                     // 清空选择
                     selectedRecords.clear();
-                    document.getElementById('selectAll').checked = false;
+                    const selectAllCheckbox = document.getElementById('selectAll');
+                    if (selectAllCheckbox) {
+                        selectAllCheckbox.checked = false;
+                    }
                     updateBatchDownloadButton();
                     
                     // 重新加载记录
@@ -892,8 +908,10 @@
                 console.error('批量删除失败:', error);
                 alert('批量删除失败: ' + error.message);
             } finally {
-                btn.disabled = false;
-                btn.innerHTML = originalText;
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = originalText;
+                }
             }
         }
 

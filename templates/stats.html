@@ -83,23 +83,11 @@
             overflow: hidden;
         }
         
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px;
-            text-align: center;
-        }
-        
-        .header h1 {
-            font-size: 2em;
-            margin-bottom: 10px;
-        }
-        
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
             gap: 20px;
-            padding: 30px;
+            padding: 20px;
         }
         
         .stat-card {
@@ -226,12 +214,7 @@
     </div>
     
     <div class="container">
-        <div class="header">
-            <h1>📈 系统使用统计</h1>
-            <p>查看所有用户的生成记录和使用情况</p>
-        </div>
-        
-        <div class="stats-grid">
+        <div class="stats-grid" style="padding-top: 20px;">
             <div class="stat-card">
                 <h3>总用户数</h3>
                 <div class="value" id="totalUsers">-</div>
