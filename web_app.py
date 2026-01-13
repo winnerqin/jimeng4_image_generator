@@ -12,6 +12,7 @@ from functools import wraps
 from flask import Flask, render_template, request, jsonify, send_from_directory, session, redirect, url_for, flash
 from werkzeug.utils import secure_filename
 from openai import OpenAI
+from volcenginesdkarkruntime import Ark
 import database
 
 def generate_random_filename(length=8):
@@ -956,6 +957,18 @@ def manage_samples():
 def script_analysis():
     """剧本分析页面"""
     return render_template('script_analysis.html', user=get_current_user())
+
+@app.route('/video-generate')
+@login_required
+def video_generate_page():
+    """视频生成页面"""
+    return render_template('video_generate.html', user=get_current_user())
+
+@app.route('/video-status')
+@login_required
+def video_status_page():
+    """视频任务状态查询页面"""
+    return render_template('video_status.html', user=get_current_user())
 
 @app.route('/api/batch-generate', methods=['POST'])
 @login_required
@@ -2149,9 +2162,355 @@ def analyze_script():
             'error': f'分析失败: {str(e)}'
         }), 500
 
+# ==================== 视频生成模块 ====================
+@app.route('/api/video-generate', methods=['POST'])
+@login_required
+def video_generate():
+    """创建视频生成任务"""
+    try:
+        user_id = session.get('user_id')
+        data = request.get_json()
+        
+        # 获取参数
+        mode = data.get('mode', 'text')  # text, first_frame, first_last_frame, reference_image
+        prompt = data.get('prompt', '').strip()
+        first_frame_image = data.get('first_frame_image', '').strip()
+        last_frame_image = data.get('last_frame_image', '').strip()
+        reference_image = data.get('reference_image', '').strip()
+        resolution = data.get('resolution', '720p')
+        ratio = data.get('ratio', '16:9')
+        duration = int(data.get('duration', 5))
+        seed = int(data.get('seed', -1))
+        generate_last_frame = data.get('generate_last_frame', False)
+        camera_fixed = data.get('camera_fixed', False)
+        watermark = data.get('watermark', False)
+        
+        log_request('POST', '/api/video-generate', user_id, f'模式={mode}, 分辨率={resolution}, 比例={ratio}')
+        
+        # 验证参数
+        if not prompt:
+            return jsonify({'success': False, 'error': '提示词不能为空'}), 400
+        
+        if mode == 'first_frame' and not first_frame_image:
+            return jsonify({'success': False, 'error': '首帧生成视频模式需要提供首帧图片URL'}), 400
+        
+        if mode == 'first_last_frame' and (not first_frame_image or not last_frame_image):
+            return jsonify({'success': False, 'error': '首尾帧生成视频模式需要提供首帧和尾帧图片URL'}), 400
+        
+        if mode == 'reference_image' and not reference_image:
+            return jsonify({'success': False, 'error': '参考图生成视频模式需要提供参考图片URL'}), 400
+        
+        if duration < 2 or duration > 12:
+            return jsonify({'success': False, 'error': '时长必须在2-12秒之间'}), 400
+        
+        # 获取 API Key
+        api_key = os.environ.get('ARK_API_KEY')
+        if not api_key:
+            return jsonify({'success': False, 'error': 'ARK_API_KEY 未配置'}), 500
+        
+        # 初始化客户端
+        client = Ark(api_key=api_key)
+        
+        # 构建content数组
+        content = []
+        
+        if mode == 'text':
+            content = [{"type": "text", "text": prompt}]
+        elif mode == 'first_frame':
+            content = [
+                {"type": "text", "text": prompt},
+                {"type": "image", "image": first_frame_image}
+            ]
+        elif mode == 'first_last_frame':
+            content = [{"type": "text", "text": prompt}]
+            if first_frame_image:
+                content.append({"type": "image", "image": first_frame_image})
+            if last_frame_image:
+                content.append({"type": "image", "image": last_frame_image})
+        elif mode == 'reference_image':
+            content = [
+                {"type": "text", "text": prompt},
+                {"type": "image", "image": reference_image}
+            ]
+        
+        # 构建API调用参数
+        create_params = {
+            "model": "doubao-seedance-1-5-pro-251215",
+            "content": content,
+            "resolution": resolution,
+            "ratio": ratio,
+            "duration": duration,
+            "camera_fixed": camera_fixed,
+            "watermark": watermark
+        }
+        
+        if seed != -1:
+            create_params["seed"] = seed
+        
+        if generate_last_frame:
+            create_params["generate_last_frame"] = True
+        
+        # 创建视频生成任务
+        resp = client.content_generation.tasks.create(**create_params)
+        
+        # 获取任务ID
+        task_id = None
+        if hasattr(resp, 'task_id'):
+            task_id = resp.task_id
+        elif hasattr(resp, 'id'):
+            task_id = resp.id
+        elif isinstance(resp, dict):
+            task_id = resp.get('task_id') or resp.get('id')
+        elif hasattr(resp, '__dict__'):
+            resp_dict = resp.__dict__
+            task_id = resp_dict.get('task_id') or resp_dict.get('id')
+        
+        if task_id:
+            log_operation('视频生成任务创建成功', f'用户ID: {user_id}, 任务ID: {task_id}, 模式: {mode}')
+            return jsonify({
+                'success': True,
+                'task_id': task_id,
+                'mode': mode
+            })
+        else:
+            log_operation('视频生成任务创建失败', f'用户ID: {user_id}, 无法获取任务ID', 'ERROR')
+            return jsonify({
+                'success': False,
+                'error': '无法从响应中获取任务ID'
+            }), 500
+            
+    except Exception as e:
+        user_id = session.get('user_id')
+        log_operation('视频生成任务创建异常', f'用户ID: {user_id}, 错误: {str(e)}', 'ERROR')
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'创建任务失败: {str(e)}'
+        }), 500
+
+@app.route('/api/video-task-status', methods=['GET'])
+@login_required
+def video_task_status():
+    """查询视频生成任务状态"""
+    try:
+        user_id = session.get('user_id')
+        task_id = request.args.get('task_id')
+        
+        if not task_id:
+            return jsonify({'success': False, 'error': '任务ID不能为空'}), 400
+        
+        log_request('GET', '/api/video-task-status', user_id, f'任务ID={task_id}')
+        
+        # 获取 API Key
+        api_key = os.environ.get('ARK_API_KEY')
+        if not api_key:
+            return jsonify({'success': False, 'error': 'ARK_API_KEY 未配置'}), 500
+        
+        # 初始化客户端
+        client = Ark(api_key=api_key)
+        
+        # 查询任务状态
+        resp = client.content_generation.tasks.get(task_id=task_id)
+        
+        # 转换为字典
+        def convert_to_dict(obj):
+            if isinstance(obj, dict):
+                return {k: convert_to_dict(v) for k, v in obj.items()}
+            elif hasattr(obj, '__dict__'):
+                return {k: convert_to_dict(v) for k, v in obj.__dict__.items()}
+            elif hasattr(obj, '_asdict'):
+                return convert_to_dict(obj._asdict())
+            elif isinstance(obj, (list, tuple)):
+                return [convert_to_dict(item) for item in obj]
+            else:
+                return obj
+        
+        resp_dict = convert_to_dict(resp)
+        
+        # 提取任务信息
+        task_info = {
+            "success": True,
+            "task_id": task_id,
+            "status": None,
+            "download_url": None,
+            "last_frame_image": None,
+            "tokens_used": None,
+            "created_at": None,
+            "updated_at": None,
+            "duration": None
+        }
+        
+        # 尝试从响应中提取信息
+        if isinstance(resp_dict, dict):
+            task_obj = resp_dict.get('task', resp_dict)
+            if not isinstance(task_obj, dict):
+                task_obj = resp_dict
+            
+            # 提取状态
+            task_info["status"] = (
+                task_obj.get('status') or 
+                resp_dict.get('status') or 
+                'unknown'
+            )
+            
+            # 提取输出信息
+            output = task_obj.get('output', {})
+            if isinstance(output, dict):
+                task_info["download_url"] = (
+                    output.get('video_url') or 
+                    output.get('url') or 
+                    output.get('download_url')
+                )
+                task_info["last_frame_image"] = (
+                    output.get('last_frame_url') or 
+                    output.get('last_frame') or
+                    output.get('last_frame_image')
+                )
+            elif isinstance(output, str):
+                task_info["download_url"] = output
+            
+            # 提取token使用量
+            usage = task_obj.get('usage', {})
+            if isinstance(usage, dict):
+                task_info["tokens_used"] = (
+                    usage.get('total_tokens') or 
+                    usage.get('tokens') or
+                    task_obj.get('tokens_used')
+                )
+            else:
+                task_info["tokens_used"] = task_obj.get('tokens_used')
+            
+            # 提取时间信息
+            task_info["created_at"] = (
+                task_obj.get('created_at') or 
+                task_obj.get('create_time') or
+                task_obj.get('created_time')
+            )
+            task_info["updated_at"] = (
+                task_obj.get('updated_at') or 
+                task_obj.get('update_time') or
+                task_obj.get('updated_time')
+            )
+            
+            # 提取时长
+            task_info["duration"] = task_obj.get('duration')
+        
+        log_operation('视频任务状态查询', f'用户ID: {user_id}, 任务ID: {task_id}, 状态: {task_info["status"]}')
+        return jsonify(task_info)
+        
+    except Exception as e:
+        user_id = session.get('user_id')
+        log_operation('视频任务状态查询异常', f'用户ID: {user_id}, 错误: {str(e)}', 'ERROR')
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'查询失败: {str(e)}'
+        }), 500
+
+@app.route('/api/video-task-status-list', methods=['POST'])
+@login_required
+def video_task_status_list():
+    """批量查询视频生成任务状态（根据任务ID列表）"""
+    try:
+        user_id = session.get('user_id')
+        data = request.get_json()
+        task_ids = data.get('task_ids', [])
+        
+        if not task_ids or not isinstance(task_ids, list):
+            return jsonify({'success': False, 'error': '任务ID列表不能为空'}), 400
+        
+        log_request('POST', '/api/video-task-status-list', user_id, f'任务数量={len(task_ids)}')
+        
+        # 获取 API Key
+        api_key = os.environ.get('ARK_API_KEY')
+        if not api_key:
+            return jsonify({'success': False, 'error': 'ARK_API_KEY 未配置'}), 500
+        
+        # 初始化客户端
+        client = Ark(api_key=api_key)
+        
+        # 转换为字典的函数
+        def convert_to_dict(obj):
+            if isinstance(obj, dict):
+                return {k: convert_to_dict(v) for k, v in obj.items()}
+            elif hasattr(obj, '__dict__'):
+                return {k: convert_to_dict(v) for k, v in obj.__dict__.items()}
+            elif hasattr(obj, '_asdict'):
+                return convert_to_dict(obj._asdict())
+            elif isinstance(obj, (list, tuple)):
+                return [convert_to_dict(item) for item in obj]
+            else:
+                return obj
+        
+        results = []
+        for task_id in task_ids:
+            try:
+                resp = client.content_generation.tasks.get(task_id=task_id)
+                resp_dict = convert_to_dict(resp)
+                
+                task_info = {
+                    "task_id": task_id,
+                    "status": None,
+                    "download_url": None,
+                    "last_frame_image": None,
+                    "tokens_used": None,
+                    "created_at": None,
+                    "updated_at": None,
+                    "duration": None
+                }
+                
+                if isinstance(resp_dict, dict):
+                    task_obj = resp_dict.get('task', resp_dict)
+                    if not isinstance(task_obj, dict):
+                        task_obj = resp_dict
+                    
+                    task_info["status"] = task_obj.get('status') or resp_dict.get('status') or 'unknown'
+                    
+                    output = task_obj.get('output', {})
+                    if isinstance(output, dict):
+                        task_info["download_url"] = output.get('video_url') or output.get('url') or output.get('download_url')
+                        task_info["last_frame_image"] = output.get('last_frame_url') or output.get('last_frame') or output.get('last_frame_image')
+                    elif isinstance(output, str):
+                        task_info["download_url"] = output
+                    
+                    usage = task_obj.get('usage', {})
+                    if isinstance(usage, dict):
+                        task_info["tokens_used"] = usage.get('total_tokens') or usage.get('tokens') or task_obj.get('tokens_used')
+                    else:
+                        task_info["tokens_used"] = task_obj.get('tokens_used')
+                    
+                    task_info["created_at"] = task_obj.get('created_at') or task_obj.get('create_time') or task_obj.get('created_time')
+                    task_info["updated_at"] = task_obj.get('updated_at') or task_obj.get('update_time') or task_obj.get('updated_time')
+                    task_info["duration"] = task_obj.get('duration')
+                
+                results.append(task_info)
+            except Exception as e:
+                results.append({
+                    "task_id": task_id,
+                    "error": str(e)
+                })
+        
+        log_operation('视频任务批量状态查询', f'用户ID: {user_id}, 查询数量: {len(task_ids)}, 成功: {len([r for r in results if "error" not in r])}')
+        return jsonify({
+            'success': True,
+            'results': results
+        })
+        
+    except Exception as e:
+        user_id = session.get('user_id')
+        log_operation('视频任务批量状态查询异常', f'用户ID: {user_id}, 错误: {str(e)}', 'ERROR')
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'查询失败: {str(e)}'
+        }), 500
+
 if __name__ == '__main__':
     # 应用启动日志
-    log_operation('应用启动', f'版本: 1.0 | 环境: {"开发" if os.environ.get("DEBUG") else "生产"} | 监听地址: 0.0.0.0:5000')
+    log_operation('应用启动', f'版本: 1.0 | 环境: {"开发" if os.environ.get("DEBUG") else "生产"} | 监听地址: 0.0.0.0:5050')
     
     # 记录数据库和存储配置
     try:
@@ -2173,5 +2532,5 @@ if __name__ == '__main__':
         log_operation('创建上传目录', 'uploads/')
     
     print("启动 Web 应用...")
-    print(f"访问地址: http://localhost:5000")
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    print(f"访问地址: http://localhost:5050")
+    app.run(debug=True, host='0.0.0.0', port=5050)

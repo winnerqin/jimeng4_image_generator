@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>视频生成</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .nav-bar {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 15px 30px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        
+        .nav-bar a {
+            text-decoration: none;
+            color: #333;
+            padding: 8px 16px;
+            border-radius: 8px;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+        
+        .nav-bar a:hover, .nav-bar a.active {
+            background: #667eea;
+            color: white;
+        }
+        
+        .user-info {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .logout-btn {
+            background: #ff6b6b;
+            color: white;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 0.9em;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .form-section {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .form-group label {
+            font-weight: 600;
+            color: #333;
+            font-size: 0.95em;
+        }
+        
+        .form-group input[type="text"],
+        .form-group textarea,
+        .form-group select,
+        .form-group input[type="number"],
+        .form-group input[type="url"] {
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 1em;
+            transition: border-color 0.3s;
+        }
+        
+        .form-group input:focus,
+        .form-group textarea:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .form-group textarea {
+            min-height: 100px;
+            resize: vertical;
+            font-family: inherit;
+        }
+        
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .checkbox-group input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+        
+        .generate-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 1.2em;
+            font-weight: 600;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: transform 0.2s;
+            width: 100%;
+        }
+        
+        .generate-btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .generate-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .result-section {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f5f5f5;
+            border-radius: 10px;
+        }
+        
+        .result-section h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+        
+        .task-info {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+        
+        .task-info p {
+            margin: 5px 0;
+        }
+        
+        .status-queued, .status-running {
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .status-succeeded {
+            color: #28a745;
+            font-weight: 600;
+        }
+        
+        .status-failed {
+            color: #dc3545;
+            font-weight: 600;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="nav-bar">
+        <a href="/">🎨 单图生成</a>
+        <a href="/batch">📦 批量生成</a>
+        <a href="/records">📊 生成记录</a>
+        <a href="/video-generate" class="active">🎬 视频生成</a>
+        <a href="/video-status">📹 视频任务状态</a>
+        <a href="/script-analysis">🎬 剧本分析</a>
+        <a href="/manage-samples">🖼️ 素材管理</a>
+        {% if user.username == 'system_admin' %}
+        <a href="/stats">📈 系统统计</a>
+        {% endif %}
+        <div class="user-info">
+            <span>👤 <span class="username">{{ user.username }}</span></span>
+            <a href="/logout" class="logout-btn">登出</a>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div class="header">
+            <h1>🎬 AI 视频生成器</h1>
+            <p>输入提示词，选择生成模式，创建精彩的 AI 视频</p>
+        </div>
+        
+        <div class="content">
+            <form id="videoGenerateForm" class="form-section">
+                <div class="form-group">
+                    <label for="mode">生成模式 *</label>
+                    <select id="mode" name="mode" required onchange="updateModeFields()">
+                        <option value="text">文本生成视频</option>
+                        <option value="first_frame">首帧生成视频</option>
+                        <option value="first_last_frame">首尾帧生成视频</option>
+                        <option value="reference_image">参考图生成视频</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="prompt">提示词 *</label>
+                    <textarea id="prompt" name="prompt" placeholder="描述你想要的视频内容..." required></textarea>
+                </div>
+                
+                <div class="form-group" id="firstFrameGroup" style="display: none;">
+                    <label for="first_frame_image">首帧图片URL *</label>
+                    <input type="url" id="first_frame_image" name="first_frame_image" placeholder="https://...">
+                </div>
+                
+                <div class="form-group" id="lastFrameGroup" style="display: none;">
+                    <label for="last_frame_image">尾帧图片URL *</label>
+                    <input type="url" id="last_frame_image" name="last_frame_image" placeholder="https://...">
+                </div>
+                
+                <div class="form-group" id="referenceImageGroup" style="display: none;">
+                    <label for="reference_image">参考图片URL *</label>
+                    <input type="url" id="reference_image" name="reference_image" placeholder="https://...">
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="resolution">分辨率</label>
+                        <select id="resolution" name="resolution">
+                            <option value="480p">480p</option>
+                            <option value="720p" selected>720p</option>
+                            <option value="1080p">1080p</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="ratio">视频比例</label>
+                        <select id="ratio" name="ratio">
+                            <option value="16:9" selected>16:9</option>
+                            <option value="4:3">4:3</option>
+                            <option value="1:1">1:1</option>
+                            <option value="3:4">3:4</option>
+                            <option value="9:16">9:16</option>
+                            <option value="21:9">21:9</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="duration">时长（秒）</label>
+                        <input type="number" id="duration" name="duration" value="5" min="2" max="12" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="seed">种子值（-1为随机）</label>
+                        <input type="number" id="seed" name="seed" value="-1" min="-1">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="generate_last_frame" name="generate_last_frame">
+                        <label for="generate_last_frame">生成尾帧图像</label>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="camera_fixed" name="camera_fixed">
+                        <label for="camera_fixed">固定摄像头</label>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="watermark" name="watermark">
+                        <label for="watermark">添加水印</label>
+                    </div>
+                </div>
+                
+                <button type="submit" class="generate-btn" id="generateBtn">
+                    🚀 开始生成
+                </button>
+            </form>
+            
+            <div class="result-section" id="resultSection" style="display: none;">
+                <h3>生成结果</h3>
+                <div id="taskInfo" class="task-info"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function updateModeFields() {
+            const mode = document.getElementById('mode').value;
+            const firstFrameGroup = document.getElementById('firstFrameGroup');
+            const lastFrameGroup = document.getElementById('lastFrameGroup');
+            const referenceImageGroup = document.getElementById('referenceImageGroup');
+            
+            // 隐藏所有字段
+            firstFrameGroup.style.display = 'none';
+            lastFrameGroup.style.display = 'none';
+            referenceImageGroup.style.display = 'none';
+            
+            // 根据模式显示相应字段
+            if (mode === 'first_frame') {
+                firstFrameGroup.style.display = 'block';
+            } else if (mode === 'first_last_frame') {
+                firstFrameGroup.style.display = 'block';
+                lastFrameGroup.style.display = 'block';
+            } else if (mode === 'reference_image') {
+                referenceImageGroup.style.display = 'block';
+            }
+        }
+        
+        document.getElementById('videoGenerateForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const generateBtn = document.getElementById('generateBtn');
+            const resultSection = document.getElementById('resultSection');
+            const taskInfo = document.getElementById('taskInfo');
+            
+            generateBtn.disabled = true;
+            generateBtn.textContent = '生成中...';
+            resultSection.style.display = 'none';
+            
+            const formData = {
+                mode: document.getElementById('mode').value,
+                prompt: document.getElementById('prompt').value,
+                resolution: document.getElementById('resolution').value,
+                ratio: document.getElementById('ratio').value,
+                duration: parseInt(document.getElementById('duration').value),
+                seed: parseInt(document.getElementById('seed').value),
+                generate_last_frame: document.getElementById('generate_last_frame').checked,
+                camera_fixed: document.getElementById('camera_fixed').checked,
+                watermark: document.getElementById('watermark').checked
+            };
+            
+            // 根据模式添加图片URL
+            const mode = formData.mode;
+            if (mode === 'first_frame') {
+                formData.first_frame_image = document.getElementById('first_frame_image').value;
+            } else if (mode === 'first_last_frame') {
+                formData.first_frame_image = document.getElementById('first_frame_image').value;
+                formData.last_frame_image = document.getElementById('last_frame_image').value;
+            } else if (mode === 'reference_image') {
+                formData.reference_image = document.getElementById('reference_image').value;
+            }
+            
+            try {
+                const response = await fetch('/api/video-generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(formData)
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    taskInfo.innerHTML = `
+                        <p><strong>✅ 任务创建成功！</strong></p>
+                        <p><strong>任务ID:</strong> ${result.task_id}</p>
+                        <p><strong>生成模式:</strong> ${result.mode}</p>
+                        <p style="margin-top: 10px;">
+                            <a href="/video-status?task_id=${result.task_id}" style="color: #667eea; text-decoration: none;">
+                                📹 查看任务状态 →
+                            </a>
+                        </p>
+                    `;
+                    resultSection.style.display = 'block';
+                } else {
+                    alert('生成失败: ' + result.error);
+                }
+            } catch (error) {
+                alert('生成失败: ' + error.message);
+            } finally {
+                generateBtn.disabled = false;
+                generateBtn.textContent = '🚀 开始生成';
+            }
+        });
+        
+        // 初始化
+        updateModeFields();
+    </script>
+</body>
+</html>
