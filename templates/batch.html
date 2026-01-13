@@ -474,9 +474,9 @@
                             <tr>
                                 <th style="width: 60px;">序号</th>
                                 <th style="width: 250px;">提示词 *</th>
-                                <th style="width: 150px;">负面提示词</th>
                                 <th style="width: 120px;">图片比例</th>
                                 <th style="width: 100px;">分辨率</th>
+                                <th style="width: 150px;">图片风格</th>
                                 <th style="width: 200px;">参考图</th>
                                 <th style="width: 100px;">生成数量</th>
                                 <th style="width: 120px;">文件名</th>
@@ -528,6 +528,7 @@
                 <div style="margin-left:auto; display:flex; gap:8px;">
                     <button type="button" id="batchPersonBtn" class="btn btn-sm btn-primary">人物库</button>
                     <button type="button" id="batchSceneBtn" class="btn btn-sm">场景库</button>
+                    <button type="button" id="batchRecentBtn" class="btn btn-sm">最近生成</button>
                 </div>
             </div>
             <p style="color: #666; margin-top: 10px;">点击图片选择（最多4张）</p>
@@ -549,6 +550,8 @@
         let selectedSamplesForRow = [];
         // 批量模态示例图类别（person/scene）
         let batchSampleCategory = 'person';
+        // 图片风格列表
+        let imageStyles = [];
         
         // 用于控制批量生成请求的 AbortController
         let batchGenerateAbortController = null;
@@ -591,12 +594,17 @@
             // 初始化批量模态类别按钮
             const btnP = document.getElementById('batchPersonBtn');
             const btnS = document.getElementById('batchSceneBtn');
-            if (btnP && btnS) {
+            const btnR = document.getElementById('batchRecentBtn');
+            if (btnP && btnS && btnR) {
                 btnP.addEventListener('click', () => switchBatchSampleCategory('person'));
                 btnS.addEventListener('click', () => switchBatchSampleCategory('scene'));
+                btnR.addEventListener('click', () => switchBatchSampleCategory('recent'));
             }
             // 默认按 person 加载
             loadSampleImages(batchSampleCategory);
+            
+            // 加载图片风格列表
+            loadImageStyles();
 
             // 尝试恢复保存的数据
             if (!loadBatchData()) {
@@ -604,6 +612,44 @@
             }
             // (保持原有行为：不自动清除批量缓存)
         });
+        
+        // 加载图片风格列表
+        async function loadImageStyles() {
+            try {
+                const response = await fetch('/api/image-styles');
+                const data = await response.json();
+                if (data.success && data.styles) {
+                    imageStyles = data.styles;
+                    // 如果表格已渲染，更新所有风格下拉框
+                    updateAllStyleSelects();
+                }
+            } catch (error) {
+                console.error('加载风格列表失败:', error);
+            }
+        }
+        
+        // 更新所有行的风格下拉框
+        function updateAllStyleSelects() {
+            batchData.forEach((row, index) => {
+                const select = document.getElementById(`style_${index}`);
+                if (select) {
+                    // 保存当前选中的值
+                    const currentValue = row.image_style || '';
+                    
+                    // 清空并重新填充选项
+                    select.innerHTML = '<option value="">无（使用默认风格）</option>';
+                    imageStyles.forEach(style => {
+                        const option = document.createElement('option');
+                        option.value = style.id;
+                        option.textContent = style.name || style.id;
+                        if (style.id === currentValue) {
+                            option.selected = true;
+                        }
+                        select.appendChild(option);
+                    });
+                }
+            });
+        }
         
         // 加载示例图（按类别）
         async function loadSampleImages(category) {
@@ -625,16 +671,45 @@
             batchSampleCategory = cat;
             const btnP = document.getElementById('batchPersonBtn');
             const btnS = document.getElementById('batchSceneBtn');
-            if (btnP && btnS) {
+            const btnR = document.getElementById('batchRecentBtn');
+            if (btnP && btnS && btnR) {
                 btnP.classList.toggle('btn-primary', cat === 'person');
                 btnS.classList.toggle('btn-primary', cat === 'scene');
+                btnR.classList.toggle('btn-primary', cat === 'recent');
             }
-            await loadSampleImages(cat);
+            
+            if (cat === 'recent') {
+                await loadRecentImages();
+            } else {
+                await loadSampleImages(cat);
+            }
 
             // 如果模态已打开，实时刷新模态内的示例图
             const modal = document.getElementById('sampleModal');
             if (modal && modal.classList.contains('active')) {
                 renderModalSampleGrid();
+            }
+        }
+        
+        // 加载最近生成的图片
+        async function loadRecentImages() {
+            try {
+                const response = await fetch('/api/recent-images?limit=50');
+                const data = await response.json();
+                
+                if (data.success && data.images) {
+                    sampleImages = data.images;
+                    renderModalSampleGrid();
+                } else {
+                    sampleImages = [];
+                    const grid = document.getElementById('modalSampleGrid');
+                    if (grid) {
+                        grid.innerHTML = '<div style="text-align:center; padding:40px; color:#999;">暂无最近生成的图片</div>';
+                    }
+                }
+            } catch (error) {
+                console.error('加载最近生成图片失败:', error);
+                sampleImages = [];
             }
         }
 
@@ -661,9 +736,9 @@
             const rowIndex = batchData.length;
             batchData.push({
                 prompt: '',
-                negative_prompt: '',
                 aspect_ratio: '1:1',
                 resolution: '2k',
+                image_style: '',
                 ref_images_text: '',
                 sample_images: [],
                 num_images: 1,
@@ -672,6 +747,8 @@
             
             saveBatchData();
             renderTable();
+            // 添加行后更新风格下拉框
+            setTimeout(() => updateAllStyleSelects(), 100);
         }
         
         // 删除行
@@ -697,10 +774,6 @@
                                   placeholder="描述你想要的图片...">${row.prompt}</textarea>
                     </td>
                     <td>
-                        <textarea onchange="updateRow(${index}, 'negative_prompt', this.value)"
-                                  placeholder="不想要的内容...">${row.negative_prompt}</textarea>
-                    </td>
-                    <td>
                         <select onchange="updateRow(${index}, 'aspect_ratio', this.value)">
                             <option value="1:1" ${row.aspect_ratio === '1:1' ? 'selected' : ''}>1:1</option>
                             <option value="2:3" ${row.aspect_ratio === '2:3' ? 'selected' : ''}>2:3</option>
@@ -715,6 +788,14 @@
                         <select onchange="updateRow(${index}, 'resolution', this.value)">
                             <option value="2k" ${row.resolution === '2k' ? 'selected' : ''}>2K</option>
                             <option value="4k" ${row.resolution === '4k' ? 'selected' : ''}>4K</option>
+                        </select>
+                    </td>
+                    <td>
+                        <select id="style_${index}" onchange="updateRow(${index}, 'image_style', this.value)" class="style-select">
+                            <option value="">无（使用默认风格）</option>
+                            ${imageStyles.map(style => 
+                                `<option value="${style.id}" ${row.image_style === style.id ? 'selected' : ''}>${style.name || style.id}</option>`
+                            ).join('')}
                         </select>
                     </td>
                     <td>
@@ -854,6 +935,8 @@
             saveBatchData();
             closeSampleModal();
             renderTable();
+            // 确认选择后更新风格下拉框
+            updateAllStyleSelects();
         }
         
         // 关闭模态框
@@ -913,9 +996,9 @@
                     
                     return {
                         prompt: row['提示词'] || '',
-                        negative_prompt: row['负面提示词'] || '',
                         aspect_ratio: String(aspectRatio),
                         resolution: row['分辨率'] || '2k',
+                        image_style: row['图片风格'] || row['风格'] || '',
                         ref_images_text: row['参考图'] || row['示例图文件名'] || '',
                         sample_images: matchedSamples,
                         num_images: row['生成数量'] || 1,
@@ -925,6 +1008,8 @@
                 
                 saveBatchData(); // 保存到localStorage
                 renderTable();
+                // 导入后更新风格下拉框
+                setTimeout(() => updateAllStyleSelects(), 100);
                 
                 const totalMatched = batchData.reduce((sum, row) => sum + row.sample_images.length, 0);
                 alert(`成功导入 ${batchData.length} 行数据，匹配 ${totalMatched} 个示例图`);
@@ -937,7 +1022,6 @@
             const template = [
                 {
                     '提示词': '一只可爱的猫咪',
-                    '负面提示词': '模糊，低质量',
                     '图片比例': '1:1',
                     '分辨率': '2k',
                     '参考图': 'sdk_generated_20251130, example_image',
@@ -946,7 +1030,6 @@
                 },
                 {
                     '提示词': '美丽的风景画',
-                    '负面提示词': '',
                     '图片比例': '16:9',
                     '分辨率': '2k',
                     '参考图': '',
@@ -966,9 +1049,9 @@
             const exportData = batchData.map((row, index) => ({
                 '序号': index + 1,
                 '提示词': row.prompt,
-                '负面提示词': row.negative_prompt,
                 '图片比例': row.aspect_ratio,
                 '分辨率': row.resolution,
+                '图片风格': row.image_style || '',
                 '参考图': row.ref_images_text || row.sample_images.map(img => img.filename.split('.')[0]).join(', '),
                 '生成数量': row.num_images,
                 '文件名': row.filename

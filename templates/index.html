@@ -291,6 +291,83 @@
             transform: scale(1.2);
         }
         
+        .image-modal-actions {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 15px;
+            z-index: 10001;
+        }
+        
+        .image-modal-nav {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(0, 0, 0, 0.5);
+            color: white;
+            font-size: 36px;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            z-index: 10001;
+            user-select: none;
+        }
+        
+        .image-modal-nav:hover {
+            background: rgba(0, 0, 0, 0.8);
+            transform: translateY(-50%) scale(1.1);
+        }
+        
+        .image-modal-nav.prev {
+            left: 20px;
+        }
+        
+        .image-modal-nav.next {
+            right: 20px;
+        }
+        
+        .image-modal-nav:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+        
+        .image-modal-nav:disabled:hover {
+            transform: translateY(-50%);
+            background: rgba(0, 0, 0, 0.5);
+        }
+        
+        .image-modal-btn {
+            padding: 12px 24px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .image-modal-btn:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+        }
+        
+        .image-modal-btn.selected {
+            background: #28a745;
+        }
+        
+        .image-modal-btn.selected:hover {
+            background: #218838;
+        }
+        
         .result-info {
             padding: 15px;
             background: #f8f9fa;
@@ -616,8 +693,8 @@
                     
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="num_images">生成数量</label>
-                            <input type="number" id="num_images" name="num_images" value="1" min="1" max="10">
+                            <label for="num_images">生成数量（>1 时生成组图）</label>
+                            <input type="number" id="num_images" name="num_images" value="1" min="1" max="15">
                         </div>
                         
                         <div class="form-group">
@@ -635,8 +712,8 @@
                         </div>
                         
                         <div class="form-group">
-                            <label for="sequential_count">组图数量</label>
-                            <input type="number" id="sequential_count" name="sequential_count" value="1" min="1" max="15">
+                            <label for="output_filename">文件名（可选，为空则随机生成）</label>
+                            <input type="text" id="output_filename" name="output_filename" placeholder="例如: my_image">
                         </div>
                     </div>
                     
@@ -668,7 +745,14 @@
     <!-- 图片放大模态框 -->
     <div id="imageModal" class="image-modal">
         <span class="image-modal-close">&times;</span>
+        <button class="image-modal-nav prev" id="prevImageBtn" onclick="navigateImage(-1)">‹</button>
+        <button class="image-modal-nav next" id="nextImageBtn" onclick="navigateImage(1)">›</button>
         <img class="image-modal-content" id="modalImage" src="" alt="放大图片">
+        <div class="image-modal-actions">
+            <button class="image-modal-btn" id="selectAsReferenceBtn" onclick="toggleModalImageSelection()">
+                ✓ 选择为参考图
+            </button>
+        </div>
     </div>
     
     <script>
@@ -686,7 +770,7 @@
                     num_images: document.getElementById('num_images').value,
                     image_style: document.getElementById('image_style').value,
                     seed: document.getElementById('seed').value,
-                    sequential_count: parseInt(document.getElementById('sequential_count').value) || 1
+                    output_filename: document.getElementById('output_filename').value
                 };
                 localStorage.setItem('indexFormData', JSON.stringify(formData));
             } catch (e) {
@@ -706,7 +790,7 @@
                     document.getElementById('num_images').value = formData.num_images || 1;
                     document.getElementById('image_style').value = formData.image_style || '';
                     document.getElementById('seed').value = formData.seed || 0;
-                    document.getElementById('sequential_count').value = formData.sequential_count || 1;
+                    document.getElementById('output_filename').value = formData.output_filename || '';
                 }
             } catch (e) {
                 console.error('恢复表单数据失败:', e);
@@ -715,7 +799,7 @@
         
         // 监听表单输入变化
         function setupAutoSave() {
-            const inputs = ['prompt', 'aspect_ratio', 'resolution', 'num_images', 'image_style', 'seed', 'sequential_count'];
+            const inputs = ['prompt', 'aspect_ratio', 'resolution', 'num_images', 'image_style', 'seed', 'output_filename'];
             inputs.forEach(id => {
                 const element = document.getElementById(id);
                 if (element) {
@@ -748,7 +832,7 @@
                     div.className = 'preview-image';
                     const imageUrl = e.target.result;
                     div.innerHTML = `
-                        <img src="${imageUrl}" alt="预览" style="cursor: pointer;" onclick="openImageModal('${imageUrl}')">
+                        <img src="${imageUrl}" alt="预览" style="cursor: pointer;" onclick="openImageModal('${imageUrl}', null)">
                         <button class="remove-btn" onclick="removeFile(${index}); event.stopPropagation();">×</button>
                     `;
                     previewContainer.appendChild(div);
@@ -1035,7 +1119,7 @@
                 const div = document.createElement('div');
                 div.className = 'result-image';
                 div.innerHTML = `
-                    <img src="${img.url}" alt="生成的图片 ${index + 1}" onclick="openImageModal('${img.url}')">
+                    <img src="${img.url}" alt="生成的图片 ${index + 1}" onclick="openImageModal('${img.url}', '${img.filename}')">
                     <div class="result-info">
                         <p><strong>文件名:</strong> ${img.filename}</p>
                         <p><strong>种子值:</strong> ${img.seed}</p>
@@ -1153,7 +1237,7 @@
                         div.onclick = (e) => {
                             // 如果点击的是图片本身或放大图标，放大显示
                             if (e.target.tagName === 'IMG' || e.target.classList.contains('sample-image-zoom') || e.target.closest('.sample-image-zoom')) {
-                                openImageModal(img.url);
+                                openImageModal(img.url, img.filename, index);
                                 return;
                             }
                             // 否则触发选择功能
@@ -1195,7 +1279,7 @@
                         div.onclick = (e) => {
                             // 如果点击的是图片本身或放大图标，放大显示
                             if (e.target.tagName === 'IMG' || e.target.classList.contains('sample-image-zoom') || e.target.closest('.sample-image-zoom')) {
-                                openImageModal(img.url);
+                                openImageModal(img.url, img.filename, index);
                                 return;
                             }
                             // 否则触发选择功能
@@ -1308,12 +1392,109 @@
             });
         }
         
+        // 当前模态框中显示的图片URL和索引
+        let currentModalImageUrl = null;
+        let currentModalImageFilename = null;
+        let currentModalImageIndex = -1;
+        
         // 图片放大功能
-        function openImageModal(imageUrl) {
+        function openImageModal(imageUrl, filename, imageIndex) {
             const modal = document.getElementById('imageModal');
             const modalImg = document.getElementById('modalImage');
+            const selectBtn = document.getElementById('selectAsReferenceBtn');
+            const prevBtn = document.getElementById('prevImageBtn');
+            const nextBtn = document.getElementById('nextImageBtn');
+            
+            // 如果传入了索引，使用它；否则在 sampleImages 中查找
+            if (imageIndex !== undefined && imageIndex >= 0) {
+                currentModalImageIndex = imageIndex;
+            } else {
+                currentModalImageIndex = sampleImages.findIndex(img => img.url === imageUrl);
+            }
+            
+            currentModalImageUrl = imageUrl;
+            currentModalImageFilename = filename || 'generated_reference.jpg';
+            
             modalImg.src = imageUrl;
             modal.classList.add('active');
+            
+            // 更新导航按钮状态
+            updateModalNavButtons();
+            
+            // 检查是否已选择
+            const isSelected = selectedSampleImages.some(img => img.url === imageUrl);
+            if (isSelected) {
+                selectBtn.textContent = '✗ 取消选择';
+                selectBtn.classList.add('selected');
+            } else {
+                selectBtn.textContent = '✓ 选择为参考图';
+                selectBtn.classList.remove('selected');
+            }
+        }
+        
+        // 更新模态框导航按钮状态
+        function updateModalNavButtons() {
+            const prevBtn = document.getElementById('prevImageBtn');
+            const nextBtn = document.getElementById('nextImageBtn');
+            
+            if (!prevBtn || !nextBtn || !sampleImages || sampleImages.length === 0) {
+                if (prevBtn) prevBtn.style.display = 'none';
+                if (nextBtn) nextBtn.style.display = 'none';
+                return;
+            }
+            
+            // 显示按钮
+            prevBtn.style.display = 'flex';
+            nextBtn.style.display = 'flex';
+            
+            // 更新按钮状态
+            prevBtn.disabled = currentModalImageIndex <= 0;
+            nextBtn.disabled = currentModalImageIndex >= sampleImages.length - 1;
+        }
+        
+        // 切换图片（上一张/下一张）
+        function navigateImage(direction) {
+            if (!sampleImages || sampleImages.length === 0) return;
+            
+            const newIndex = currentModalImageIndex + direction;
+            if (newIndex < 0 || newIndex >= sampleImages.length) return;
+            
+            const img = sampleImages[newIndex];
+            if (img) {
+                openImageModal(img.url, img.filename, newIndex);
+            }
+        }
+        
+        // 切换模态框图片的选择状态
+        function toggleModalImageSelection() {
+            if (!currentModalImageUrl) return;
+            
+            const selectBtn = document.getElementById('selectAsReferenceBtn');
+            const existingIndex = selectedSampleImages.findIndex(img => img.url === currentModalImageUrl);
+            
+            if (existingIndex >= 0) {
+                // 取消选择
+                selectedSampleImages.splice(existingIndex, 1);
+                selectBtn.textContent = '✓ 选择为参考图';
+                selectBtn.classList.remove('selected');
+            } else {
+                // 检查是否超过限制
+                if (selectedSampleImages.length >= 4) {
+                    alert('最多只能选择 4 张参考图');
+                    return;
+                }
+                
+                // 选择
+                selectedSampleImages.push({
+                    url: currentModalImageUrl,
+                    filename: currentModalImageFilename
+                });
+                selectBtn.textContent = '✗ 取消选择';
+                selectBtn.classList.add('selected');
+            }
+            
+            // 更新示例图UI
+            updateSampleImagesUI();
         }
         
         function closeImageModal() {
@@ -1338,10 +1519,17 @@
                 });
             }
             
-            // ESC 键关闭
+            // ESC 键关闭，左右箭头键切换图片
             document.addEventListener('keydown', function(e) {
-                if (e.key === 'Escape' && modal && modal.classList.contains('active')) {
-                    closeImageModal();
+                const modal = document.getElementById('imageModal');
+                if (modal && modal.classList.contains('active')) {
+                    if (e.key === 'Escape') {
+                        closeImageModal();
+                    } else if (e.key === 'ArrowLeft') {
+                        navigateImage(-1);
+                    } else if (e.key === 'ArrowRight') {
+                        navigateImage(1);
+                    }
                 }
             });
         });
@@ -1356,7 +1544,6 @@
                 num_images: document.getElementById('num_images').value,
                 steps: document.getElementById('steps').value,
                 seed: document.getElementById('seed').value,
-                sequential_count: parseInt(document.getElementById('sequential_count').value) || 1,
                 sample_image_urls: selectedSampleImages.map(img => img.url)
             };
         }
@@ -1382,7 +1569,6 @@
                 document.getElementById('num_images').value = payload.num_images || 1;
                 document.getElementById('steps').value = payload.steps || 28;
                 document.getElementById('seed').value = payload.seed || 0;
-                document.getElementById('sequential_count').value = payload.sequential_count || 1;
                 
                 // 使用传入的图片URL作为参考图（最近一次生成的图片）
                 if (imageUrl) {

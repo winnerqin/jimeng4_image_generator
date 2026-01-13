@@ -19,6 +19,37 @@ def generate_random_filename(length=8):
     chars = string.ascii_lowercase + string.digits
     return ''.join(random.choice(chars) for _ in range(length))
 
+def get_unique_filename(user_output_folder, base_filename, extension='.jpg'):
+    """
+    获取唯一文件名，如果文件已存在，则在文件名后添加_1, _2等后缀
+    如果base_filename为空，则生成随机文件名
+    """
+    if not base_filename or not base_filename.strip():
+        # 如果文件名为空，生成随机文件名
+        base_filename = generate_random_filename(8)
+    
+    # 确保扩展名正确
+    if not base_filename.endswith(extension):
+        base_filename = base_filename + extension
+    
+    # 检查文件是否存在
+    filepath = os.path.join(user_output_folder, base_filename)
+    if not os.path.exists(filepath):
+        return base_filename
+    
+    # 如果文件存在，添加后缀
+    name_without_ext = base_filename[:-len(extension)]
+    counter = 1
+    while True:
+        new_filename = f"{name_without_ext}_{counter}{extension}"
+        new_filepath = os.path.join(user_output_folder, new_filename)
+        if not os.path.exists(new_filepath):
+            return new_filename
+        counter += 1
+        if counter > 1000:  # 防止无限循环
+            # 如果超过1000次，使用随机文件名
+            return generate_random_filename(8) + extension
+
 # ==================== 日志工具 ====================
 # 配置日志记录
 logging.basicConfig(
@@ -400,9 +431,9 @@ def generate():
         aspect_ratio = request.form.get('aspect_ratio', '1:1')
         resolution = request.form.get('resolution', '2k')
         num_images = int(request.form.get('num_images', 1))
-        sequential_count = int(request.form.get('sequential_count', 1))
         image_style = request.form.get('image_style', '').strip()
         seed = int(request.form.get('seed', 0))
+        output_filename = request.form.get('output_filename', '').strip()
         
         log_request('POST', '/generate', user_id, 
                    f'提示词长度={len(prompt)}, 数量={num_images}, 尺寸={aspect_ratio}/{resolution}')
@@ -475,8 +506,9 @@ def generate():
         
         # 生成图片
         generated_images = []
-        # 如果使用组图生成，只调用一次API；否则按num_images循环
-        total_needed = 1 if sequential_count > 1 else num_images
+        # 如果 num_images > 1，使用组图功能，只调用一次API；否则按num_images循环
+        use_group_images = num_images > 1
+        total_needed = 1 if use_group_images else num_images
         
         for i in range(total_needed):
             # 计算种子（方舟大模型 API 限制：最大 99999999）
@@ -525,11 +557,11 @@ def generate():
                     "watermark": False,  # 默认不添加水印
                 }
                 
-                # 添加组图生成参数（仅在第一次生成时添加，因为组图功能会一次性生成多张）
-                if i == 0 and sequential_count > 1:
+                # 添加组图生成参数（当 num_images > 1 时，使用组图功能，只生成一组）
+                if i == 0 and use_group_images:
                     extra_body_params["sequential_image_generation"] = "auto"
                     extra_body_params["sequential_image_generation_options"] = {
-                        "max_images": sequential_count
+                        "max_images": num_images
                     }
                 
                 # 添加参考图片参数
@@ -554,8 +586,8 @@ def generate():
                     'resolution': resolution,
                     'seed': per_seed,
                     'image_style': image_style,
-                    'num_images': 1,
-                    'sequential_count': sequential_count,
+                    'num_images': num_images,
+                    'use_group_images': use_group_images,
                     'reference_images_count': len(image_urls),
                     'reference_images': image_urls[:3] if len(image_urls) > 3 else image_urls  # 只记录前3张
                 }
@@ -569,8 +601,8 @@ def generate():
                 print(f"  尺寸: {size_str} ({width}x{height})")
                 print(f"  宽高比: {aspect_ratio}, 分辨率: {resolution}")
                 print(f"  种子值: {per_seed}, 风格: {image_style if image_style else '无'}")
-                if sequential_count > 1:
-                    print(f"  组图数量: {sequential_count}")
+                if use_group_images:
+                    print(f"  组图模式: 是，组图数量: {num_images}")
                 print(f"  参考图数量: {len(image_urls)}")
                 if image_urls:
                     print(f"  参考图URL: {image_urls}")
@@ -609,7 +641,7 @@ def generate():
                 # 处理响应（组图生成可能返回多张图片）
                 if response.data and len(response.data) > 0:
                     # 如果使用组图生成，处理所有返回的图片
-                    images_to_process = response.data if (i == 0 and sequential_count > 1) else [response.data[0]]
+                    images_to_process = response.data if (i == 0 and use_group_images) else [response.data[0]]
                     
                     for img_idx, img_data_obj in enumerate(images_to_process):
                         img_url = img_data_obj.url
@@ -620,17 +652,33 @@ def generate():
                         if img_response.status_code == 200:
                             img_data = img_response.content
                             
-                            # 生成8位随机文件名，避免重复
-                            random_name = generate_random_filename(8)
-                            if sequential_count > 1:
-                                filename = f"{random_name}_{img_idx+1}.jpg"
-                            elif num_images > 1:
-                                filename = f"{random_name}_{i+1}.jpg"
+                            # 生成文件名
+                            user_output_folder = get_user_output_folder(user_id)
+                            
+                            if output_filename:
+                                # 如果指定了文件名
+                                if use_group_images:
+                                    # 组图模式：文件名_1, 文件名_2
+                                    base_name = output_filename if not output_filename.endswith('.jpg') else output_filename[:-4]
+                                    filename = get_unique_filename(user_output_folder, f"{base_name}_{img_idx+1}", '.jpg')
+                                elif num_images > 1:
+                                    # 多张图片：文件名_1, 文件名_2
+                                    base_name = output_filename if not output_filename.endswith('.jpg') else output_filename[:-4]
+                                    filename = get_unique_filename(user_output_folder, f"{base_name}_{i+1}", '.jpg')
+                                else:
+                                    # 单张图片：直接使用文件名
+                                    filename = get_unique_filename(user_output_folder, output_filename, '.jpg')
                             else:
-                                filename = f"{random_name}.jpg"
+                                # 如果未指定文件名，使用随机文件名
+                                random_name = generate_random_filename(8)
+                                if use_group_images:
+                                    filename = f"{random_name}_{img_idx+1}.jpg"
+                                elif num_images > 1:
+                                    filename = f"{random_name}_{i+1}.jpg"
+                                else:
+                                    filename = f"{random_name}.jpg"
                         
                         # 使用用户专属输出目录
-                        user_output_folder = get_user_output_folder(user_id)
                         output_path = os.path.join(user_output_folder, filename)
                         with open(output_path, 'wb') as f:
                             f.write(img_data)
@@ -655,7 +703,7 @@ def generate():
                                 'file_size': len(img_data),
                                 'seed': per_seed
                             }
-                            img_index = img_idx + 1 if sequential_count > 1 else i + 1
+                            img_index = img_idx + 1 if use_group_images else i + 1
                             log_operation('图片处理完成', f'用户ID={user_id}, 第{img_index}张 | {json.dumps(final_output, ensure_ascii=False)}')
                             print(f"[完成] 第 {img_index} 张图片处理完成:")
                             print(f"  文件名: {filename}")
@@ -1053,15 +1101,27 @@ def batch_generate():
                     if img_response.status_code == 200:
                         img_data = img_response.content
                         
-                        # 生成8位随机文件名，避免重复
-                        random_name = generate_random_filename(8)
-                        if num_images > 1:
-                            filename = f"{random_name}_{i+1}.jpg"
-                        else:
-                            filename = f"{random_name}.jpg"
-                        
-                        # 使用用户专属输出目录
+                        # 生成文件名
                         user_output_folder = get_user_output_folder(user_id)
+                        task_filename_base = data.get('filename', 'batch')
+                        
+                        if task_filename_base and task_filename_base.strip() and task_filename_base != 'batch':
+                            # 如果指定了文件名
+                            if num_images > 1:
+                                # 多张图片：文件名_1, 文件名_2
+                                base_name = task_filename_base if not task_filename_base.endswith('.jpg') else task_filename_base[:-4]
+                                filename = get_unique_filename(user_output_folder, f"{base_name}_{i+1}", '.jpg')
+                            else:
+                                # 单张图片：直接使用文件名
+                                filename = get_unique_filename(user_output_folder, task_filename_base, '.jpg')
+                        else:
+                            # 如果未指定文件名，使用随机文件名
+                            random_name = generate_random_filename(8)
+                            if num_images > 1:
+                                filename = f"{random_name}_{i+1}.jpg"
+                            else:
+                                filename = f"{random_name}.jpg"
+                        
                         output_path = os.path.join(user_output_folder, filename)
                         with open(output_path, 'wb') as f:
                             f.write(img_data)
@@ -1689,6 +1749,15 @@ def process_single_batch_task(task, batch_id, user_id):
                         # 或者使用第一张图片作为主要参考图
                         extra_body_params["image"] = image_urls[0]
                 
+                # 记录批量生成API调用输入
+                print("=" * 80)
+                print(f"[批量生成-输入] 批次: {batch_id}, 任务: {i+1}/{num_images}:")
+                print(f"  提示词: {prompt}")
+                print(f"  尺寸: {size_str} ({width}x{height})")
+                print(f"  宽高比: {aspect_ratio}, 分辨率: {resolution}")
+                print(f"  参考图数量: {len(image_urls)}")
+                print("=" * 80)
+                
                 response = client.images.generate(
                     model="doubao-seedream-4-5-251128",
                     prompt=full_prompt,
@@ -1706,16 +1775,27 @@ def process_single_batch_task(task, batch_id, user_id):
                     if img_response.status_code == 200:
                         img_data = img_response.content
                     
-                        # 生成8位随机文件名，避免重复
-                        random_name = generate_random_filename(8)
-                        if num_images > 1:
-                            filename = f"{random_name}_{i+1}.jpg"
-                        else:
-                            filename = f"{random_name}.jpg"
-                        
-                        # 使用用户专属输出目录
+                        # 生成文件名
                         user_output_folder = os.path.join('output', str(user_id))
                         os.makedirs(user_output_folder, exist_ok=True)
+                        
+                        if filename_base and filename_base.strip() and filename_base != 'batch':
+                            # 如果指定了文件名
+                            if num_images > 1:
+                                # 多张图片：文件名_1, 文件名_2
+                                base_name = filename_base if not filename_base.endswith('.jpg') else filename_base[:-4]
+                                filename = get_unique_filename(user_output_folder, f"{base_name}_{i+1}", '.jpg')
+                            else:
+                                # 单张图片：直接使用文件名
+                                filename = get_unique_filename(user_output_folder, filename_base, '.jpg')
+                        else:
+                            # 如果未指定文件名，使用随机文件名
+                            random_name = generate_random_filename(8)
+                            if num_images > 1:
+                                filename = f"{random_name}_{i+1}.jpg"
+                            else:
+                                filename = f"{random_name}.jpg"
+                        
                         filepath = os.path.join(user_output_folder, filename)
                         with open(filepath, 'wb') as f:
                             f.write(img_data)

@@ -290,13 +290,23 @@
             max-width: 90vw;
             max-height: 90vh;
             position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
         }
         
         .lightbox-image {
             max-width: 100%;
-            max-height: 90vh;
+            max-height: calc(90vh - 200px);
             object-fit: contain;
             border-radius: 8px;
+        }
+        
+        .lightbox-info-container {
+            width: 100%;
+            max-width: 600px;
+            margin-top: 20px;
+            position: relative;
         }
         
         .lightbox-close {
@@ -321,19 +331,48 @@
         }
         
         .lightbox-info {
-            position: absolute;
-            bottom: -80px;
-            left: 0;
-            right: 0;
+            position: relative;
+            width: 100%;
             background: rgba(0,0,0,0.7);
             color: white;
             padding: 15px;
             border-radius: 8px;
             font-size: 0.9em;
+            max-height: 200px;
+            overflow-y: auto;
+            margin-bottom: 10px;
         }
         
         .lightbox-info p {
             margin: 5px 0;
+        }
+        
+        .lightbox-info-toggle {
+            display: none;
+        }
+        
+        .lightbox-info-toggle.active {
+            display: block;
+        }
+        
+        .lightbox-info-btn {
+            position: relative;
+            margin: 0 auto;
+            padding: 10px 20px;
+            background: rgba(102, 126, 234, 0.8);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.9em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: block;
+        }
+        
+        .lightbox-info-btn:hover {
+            background: rgba(102, 126, 234, 1);
+            transform: translateY(-2px);
         }
         
         .lightbox-nav {
@@ -442,6 +481,7 @@
                             <th style="width: 100px;">图片比例</th>
                             <th style="width: 150px;">参考示例图</th>
                             <th style="width: 80px;">分辨率</th>
+                            <th style="width: 120px;">文件名</th>
                             <th style="width: 150px;">图片预览</th>
                             <th style="width: 120px;">操作</th>
                         </tr>
@@ -467,8 +507,11 @@
             <div class="lightbox-nav lightbox-prev" onclick="navigateLightbox(-1, event)">‹</div>
             <div class="lightbox-nav lightbox-next" onclick="navigateLightbox(1, event)">›</div>
             <img id="lightboxImage" class="lightbox-image" src="" alt="">
-            <div class="lightbox-info" id="lightboxInfo">
-                <!-- 动态显示图片信息 -->
+            <div class="lightbox-info-container">
+                <div class="lightbox-info" id="lightboxInfo">
+                    <!-- 动态显示图片信息 -->
+                </div>
+                <button class="lightbox-info-btn" id="lightboxInfoBtn" onclick="toggleLightboxInfo(event)">📋 查看信息</button>
             </div>
         </div>
     </div>
@@ -573,6 +616,7 @@
                         </div>
                     </td>
                     <td>${record.resolution || '-'}<br>${record.width}×${record.height}</td>
+                    <td>${record.filename || '-'}</td>
                     <td>
                         <img src="${record.image_path}" 
                              class="thumbnail" 
@@ -595,35 +639,87 @@
             });
         }
         
+        // 当前记录信息（用于切换显示）
+        let currentRecordInfo = null;
+        let isInfoExpanded = false;
+        
         // 打开图片放大查看（带记录信息）
         function openLightboxWithRecord(index) {
             currentLightboxIndex = index;
             const record = records[index];
+            currentRecordInfo = record;
+            isInfoExpanded = false;
             
             const img = document.getElementById('lightboxImage');
             img.src = record.image_path;
             
-            const info = document.getElementById('lightboxInfo');
-            info.innerHTML = `
-                <p><strong>提示词:</strong> ${record.prompt}</p>
-                <p><strong>尺寸:</strong> ${record.width} × ${record.height} (${record.aspect_ratio})</p>
-                <p><strong>生成时间:</strong> ${new Date(record.created_at).toLocaleString('zh-CN')}</p>
-                <p><strong>文件名:</strong> ${record.filename}</p>
-            `;
+            // 默认只显示文件名和尺寸
+            const btn = document.getElementById('lightboxInfoBtn');
+            if (btn) btn.style.display = 'block';
+            updateLightboxInfo(false);
             
             document.getElementById('lightbox').classList.add('active');
+        }
+        
+        // 更新lightbox信息显示
+        function updateLightboxInfo(expanded) {
+            const info = document.getElementById('lightboxInfo');
+            const btn = document.getElementById('lightboxInfoBtn');
+            
+            if (!currentRecordInfo) {
+                info.innerHTML = '';
+                if (btn) btn.style.display = 'none';
+                return;
+            }
+            
+            if (expanded) {
+                // 显示完整信息
+                info.innerHTML = `
+                    <p><strong>文件名:</strong> ${currentRecordInfo.filename || '-'}</p>
+                    <p><strong>尺寸:</strong> ${currentRecordInfo.width} × ${currentRecordInfo.height} (${currentRecordInfo.aspect_ratio || '-'})</p>
+                    <p><strong>提示词:</strong> ${currentRecordInfo.prompt || '-'}</p>
+                    <p><strong>分辨率:</strong> ${currentRecordInfo.resolution || '-'}</p>
+                    <p><strong>生成时间:</strong> ${new Date(currentRecordInfo.created_at).toLocaleString('zh-CN')}</p>
+                    ${currentRecordInfo.seed ? `<p><strong>种子值:</strong> ${currentRecordInfo.seed}</p>` : ''}
+                    ${currentRecordInfo.image_style ? `<p><strong>图片风格:</strong> ${currentRecordInfo.image_style}</p>` : ''}
+                `;
+                info.classList.add('active');
+                if (btn) btn.textContent = '🔽 收起信息';
+            } else {
+                // 只显示文件名和尺寸
+                info.innerHTML = `
+                    <p><strong>文件名:</strong> ${currentRecordInfo.filename || '-'}</p>
+                    <p><strong>尺寸:</strong> ${currentRecordInfo.width} × ${currentRecordInfo.height} (${currentRecordInfo.aspect_ratio || '-'})</p>
+                `;
+                info.classList.remove('active');
+                if (btn) btn.textContent = '📋 查看信息';
+            }
+        }
+        
+        // 切换信息显示
+        function toggleLightboxInfo(event) {
+            if (event) {
+                event.stopPropagation();
+            }
+            isInfoExpanded = !isInfoExpanded;
+            updateLightboxInfo(isInfoExpanded);
         }
         
         // 打开图片放大查看（仅图片）
         function openLightbox(url, event) {
             event.stopPropagation();
             currentLightboxIndex = -1;
+            currentRecordInfo = null;
+            isInfoExpanded = false;
             
             const img = document.getElementById('lightboxImage');
             img.src = url;
             
             const info = document.getElementById('lightboxInfo');
+            const btn = document.getElementById('lightboxInfoBtn');
             info.innerHTML = '<p>参考示例图</p>';
+            info.classList.remove('active');
+            if (btn) btn.style.display = 'none';
             
             document.getElementById('lightbox').classList.add('active');
         }
@@ -633,6 +729,8 @@
             if (event.target.id === 'lightbox' || event.target.classList.contains('lightbox-close')) {
                 document.getElementById('lightbox').classList.remove('active');
                 currentLightboxIndex = -1;
+                currentRecordInfo = null;
+                isInfoExpanded = false;
             }
         }
         
@@ -651,6 +749,8 @@
             }
             
             openLightboxWithRecord(currentLightboxIndex);
+            // 切换图片时重置信息展开状态
+            isInfoExpanded = false;
         }
         
         // 键盘导航
